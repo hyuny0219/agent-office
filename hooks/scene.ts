@@ -165,7 +165,7 @@ function planOf(w: number): Plan {
   const up = (r: RoomId, x: number, y: number): Spot => ({ room: r, x, y, up: true })
   const down = (r: RoomId, x: number, y: number): Spot => ({ room: r, x, y, up: false })
   const stalls = Math.max(1, Math.floor((w - 1 - b4 - 2) / 4))
-  const meetXs = [5, 9, 13, 17, 21].filter(dx => b1 + dx + 2 < b2 - 2)
+  const meetXs = [5, 11, 17, 23].filter(dx => b1 + dx + 2 < b2 - 2)
   return {
     w,
     rooms,
@@ -647,7 +647,7 @@ export class Office {
       const isAtOwnDesk = !isMoving && wk.goal?.room === 'office'
       if (!isAtOwnDesk) {
         const tag = a.nick
-        cv.write(Math.max(0, Math.min(plan.w - tag.length, wk.x + 1 - Math.floor(tag.length / 2))), Math.floor(wk.y / 2) - 1, tag, a.activity === 'failed' ? C.red : info.color)
+        cv.write(Math.max(0, Math.min(plan.w - tag.length, wk.x + 1 - Math.floor(tag.length / 2))), Math.floor(wk.y / 2) - 1, tag, a.activity === 'failed' ? C.red : info.color, C.label)
       }
     }
 

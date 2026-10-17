@@ -3,6 +3,12 @@
 Claude Code에서 서브에이전트들이 일하는 모습을 **위에서 내려다본 게임 속 사무실**로 보여 주는 mod입니다.
 부서·직급·연봉·성과 평가로 이루어진 인사 제도가 있고, 부서가 반복한 실수를 다음 업무 지시에 알려 줍니다.
 
+![에이전트들이 일하는 사무실(움직이는 화면)](docs/office.gif)
+
+메인 대화(BOSS)와 기획팀 FOX가 회의실에서 대화하고, 부엉이는 자료실에서 Grep, 매는 서버실에서 테스트를 돌린 뒤 자리로 돌아와 고치고, 늦게 출근한 수달이 입구에서 걸어 들어와 개발팀 자리에 앉습니다. 두루미는 일을 기다리며 탕비실 소파에 있습니다.
+
+![사무실 평면도와 패널 목록](docs/office.png)
+
 ## 설치
 
 터미널 세션의 프롬프트에서:
@@ -80,6 +86,13 @@ claude plugin install agent-office --marketplace hyuny0219/agent-office
 claude plugin validate .
 claude plugin test .
 claude --plugin-dir .
+```
+
+README 스크린샷(`docs/office.png`, `docs/office.gif`)은 `hooks/scene.ts`를 그대로 돌려 만듭니다(Pillow 필요).
+
+```
+npx tsx scripts/screenshot-frames.mts > /tmp/frames.json
+python3 scripts/render-screenshot.py /tmp/frames.json docs
 ```
 
 ## 라이선스
