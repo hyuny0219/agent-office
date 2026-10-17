@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import type { HrBook, OfficeAgent } from '../types'
-import { briefOf, deptOf, emptyBook, gradeOf, hire, leadOf, learn, patternOf, rankOf, review, salaryOf, scoreOf, tipOf } from './hr'
+import { briefOf, deptOf, emptyBook, gradeOf, handOff, hire, leadOf, learn, LESSON_TTL_MS, migrate, patternOf, rankOf, review, rework, REWORK_MS, salaryOf, scoreOf, tipOf } from './hr'
 import { activityOf, encodeCells, koNick, layoutOf, nickFor, Office, PLAN_ROWS } from './scene'
 
 const agent = (id: string, over: Partial<OfficeAgent> = {}): OfficeAgent => ({
@@ -78,6 +78,77 @@ test('교훈: 같은 오류를 묶어 세고, 두 번 이상이면 업무 지시
   expect(brief).toContain('Edit "String to replace not found in file." 2회 → Edit 전에 바꿀 부분을 Read로')
   expect(brief).toContain('평가 기준')
   expect(briefOf({ ...b, isCoaching: false }, bear)).toBeNull()
+})
+
+test('평가: 도구 없이 끝내면 무오류 가산이 없고, 실패한 테스트를 두고 끝내면 깎이며, 감점이 쌓이면 강등된다', () => {
+  expect(scoreOf({ isDone: true, isKilled: false, errors: 0, tools: 0 })).toBe(10)
+  expect(scoreOf({ isDone: true, isKilled: false, errors: 0, tools: 4, isCheckFailed: true })).toBe(6)
+  expect(scoreOf({ isDone: false, isKilled: false, errors: 0, isCheckFailed: true })).toBe(-5)
+  let b = hire(emptyBook(), 'BEAR', 'dev', 'builder', 1).book
+  b = { ...b, employees: b.employees.map(e => ({ ...e, xp: 22, avgScore: 13 })) }
+  const failed = review(b, 'BEAR', { isDone: false, isKilled: false, errors: 3 }, 5)
+  expect(failed.score).toBe(-8)
+  expect(failed.demotedTo).toBe('사원')
+  const bear = failed.book.employees[0]!
+  expect(bear.xp).toBe(14)
+  // 최근 가중 평균: 13 × 0.7 + (-8) × 0.3
+  expect(Math.round((bear.avgScore ?? 0) * 10)).toBe(67)
+  expect(review(failed.book, 'BEAR', { isDone: false, isKilled: false, errors: 5 }, 6).book.employees[0]!.xp).toBe(4)
+})
+
+test('재작업: 끝낸 직원의 파일을 BOSS가 곧 다시 고치면 한 번만 깎고, 오래 지나면 넘긴다', () => {
+  let b = hire(emptyBook(), 'BEAR', 'dev', 'builder', 1).book
+  b = review(b, 'BEAR', { isDone: true, isKilled: false, errors: 0, tools: 3 }, 100).book
+  b = handOff(b, { agentId: 'a1', nick: 'BEAR', files: ['/r/a.ts'], endedAt: 100, job: 1 })
+  expect(rework(b, '/r/other.ts', 200).nick).toBeNull()
+  const hit = rework(b, '/r/a.ts', 200)
+  expect(hit.nick).toBe('BEAR')
+  const bear = hit.book.employees[0]!
+  expect(bear.reworks).toBe(1)
+  expect(bear.xp).toBe(9)
+  expect(bear.lastScore).toBe(9)
+  expect(rework(hit.book, '/r/a.ts', 300).nick).toBeNull()
+  // 오래 지난 인계 기록은 버린다
+  const late = rework(b, '/r/a.ts', 100 + REWORK_MS + 1)
+  expect(late.nick).toBeNull()
+  expect(late.book.handoffs).toHaveLength(0)
+  // 그 뒤에 일을 하나 더 했으면 최근 평가는 그대로 두고, 평균은 줄어든 무게만큼만 고친다
+  const next = review(b, 'BEAR', { isDone: true, isKilled: false, errors: 0, tools: 1 }, 150).book
+  const after = rework(next, '/r/a.ts', 200).book.employees[0]!
+  expect(after.lastScore).toBe(13)
+  expect(Math.round((after.avgScore ?? 0) * 100)).toBe(Math.round((13 - 4 * 0.3 * 0.7) * 100))
+  // 명부에 없는 직원이면 깎았다고 하지 않는다
+  expect(rework({ ...b, employees: [] }, '/r/a.ts', 200).nick).toBeNull()
+})
+
+test('교훈: 잦은 옛 실수 8개가 자리를 차지해도 새 실수를 배우고, 2주 넘게 안 난 실수는 메모에서 뺀다', () => {
+  let b = hire(emptyBook(), 'BEAR', 'dev', 'builder', 1).book
+  for (let i = 0; i < 8; i++) for (let k = 0; k < 3; k++) b = learn(b, 'dev', 'Bash', `old failure kind ${'abcdefgh'[i]}`, 10 + i)
+  b = learn(b, 'dev', 'Edit', 'String to replace not found in file.', 100)
+  b = learn(b, 'dev', 'Edit', 'String to replace not found in file.', 101)
+  const lessons = b.lessons.dev ?? []
+  expect(lessons).toHaveLength(8)
+  expect(lessons.some(l => l.tool === 'Edit' && l.count === 2)).toBe(true)
+  const bear = b.employees[0]!
+  expect(briefOf(b, bear, 102)).toContain('String to replace not found')
+  expect(briefOf(b, bear, 101 + LESSON_TTL_MS + 1)).not.toContain('반복한 실수')
+})
+
+test('예전 판(version 1) 인사 기록을 비우지 않고 지금 형식으로 옮긴다', () => {
+  const old = { version: 1, isCoaching: false, lessons: { dev: [] }, employees: [{ nick: 'BEAR', dept: 'dev', type: 'builder', xp: 30, jobs: 3, done: 3, failed: 0, toolErrors: 1, avgScore: 11, lastScore: 12, hiredAt: 1, lastAt: 2 }] }
+  const b = migrate(old)!
+  expect(b.version).toBe(2)
+  expect(b.isCoaching).toBe(false)
+  expect(b.handoffs).toEqual([])
+  expect(b.employees[0]).toMatchObject({ nick: 'BEAR', xp: 30, reworks: 0 })
+  // 알 수 없는 부서·이상한 칸은 고쳐서 받는다
+  const odd = migrate({ employees: [{ nick: 'X', dept: 'sales', xp: null }], lessons: { dev: 'x' }, handoffs: [{ agentId: 'a' }], future: 1 })!
+  expect(odd.employees[0]).toMatchObject({ dept: 'ops', xp: 0 })
+  expect(odd.lessons.dev).toBeUndefined()
+  expect(odd.handoffs).toEqual([])
+  expect((odd as unknown as { future: number }).future).toBe(1)
+  expect(migrate(undefined)).toBeNull()
+  expect(migrate({ version: 1 })).toBeNull()
 })
 
 test('평면도: 방 표지, 부서 섬 표지와 명패, 셀 인코딩', () => {
@@ -181,8 +252,8 @@ test('서브에이전트가 뜨면 부서 직원에게 맡기고, 업무 지시�
   expect((await ui.find({ key: 'row-main' }))?.text).toContain('BOSS 보스 대표 · 회의실: 곰과 대화')
   expect(await ui.find({ type: 'Raster' })).toBeDefined()
 
-  peek = async () => (await ui.find({ key: 'row-main' }))?.text ?? ''
-  await $.tool.call({ tool: 'Bash', command: 'ls' })
+  peek = async () => (await ui.find({ key: 'row-a1' }))?.text ?? ''
+  await $.tool.call({ tool: 'Bash', command: 'ls', agentId: 'a1' })
   expect(during).toContain('도구 1회')
 
   // 끝나면 평가(오류 없이 완료 S +13) 토스트와 인사 기록
@@ -192,6 +263,50 @@ test('서브에이전트가 뜨면 부서 직원에게 맡기고, 업무 지시�
   const roster = JSON.stringify(await $.command.run({ command: 'office', args: 'hr', ...RUN }))
   expect(roster).toContain('개발팀 — 팀장 BEAR(곰)')
   expect(roster).toContain('완료 1 / 실패 0')
+})
+
+test('테스트가 실패한 채 끝내면 깎이고, 끝낸 파일을 BOSS가 다시 고치면 재작업으로 깎인다', async ($, on) => {
+  const store = new Map<string, unknown>()
+  on('store.get', (_$, e) => ({ value: store.get(e.key) }))
+  on('store.set', (_$, e) => {
+    store.set(e.key, e.value)
+    return { value: undefined }
+  })
+  on('clock.now', () => ({ value: 1000 }))
+  on('agent.spawn', () => ({ model: 'm', agentId: 'b1' }))
+  let status: 'running' | 'completed' = 'running'
+  on('agent.list', () => ({ value: [{ id: 'b1', description: '고치기', type: 'builder', status }] }))
+  const toasts: string[] = []
+  on('ui.toast', (_$, e) => {
+    toasts.push(JSON.stringify(e))
+    return { value: undefined }
+  })
+  on('tool.call', (_$, e) => {
+    const f = (e as { file_path?: string }).file_path
+    if (f === '/r/denied.ts' || (e as { new_string?: string }).new_string === 'DENY') return { deny: '사용자가 거절함' }
+    return e.tool === 'Bash' ? { result: 'exit 1', isError: true } : { result: 'ok' }
+  })
+  on('turn.complete', () => ({ text: '' }))
+
+  await $.agent.spawn({ tool_use_id: 't3', prompt: '고쳐', description: '고치기', subagentType: 'builder', ...SPAWN })
+  await $.tool.call({ tool: 'Edit', file_path: '/r/a.ts', old_string: 'a', new_string: 'b', agentId: 'b1' })
+  await $.tool.call({ tool: 'Edit', file_path: '/r/denied.ts', old_string: 'a', new_string: 'b', agentId: 'b1' })
+  await $.tool.call({ tool: 'Bash', command: 'npm test', agentId: 'b1' })
+  // 테스트가 아닌 명령의 실패는 검증 결과를 바꾸지 않는다
+  await $.tool.call({ tool: 'Bash', command: 'grep -r foo .', agentId: 'b1' })
+  status = 'completed'
+  await $.turn.complete({ answer: '끝', durationMs: 1, isAborted: false, turnId: 'y', agentId: 'b1', reason: 'answer' })
+  // 완료 10 - 도구 오류 3(거절·npm test·grep) - 테스트 실패 4
+  expect(toasts.join()).toContain('BEAR 사원 평가 C (+3) · 테스트·빌드 실패한 채 완료 -4')
+
+  // 거절된 수정은 고친 게 아니다: 직원 쪽이든 BOSS 쪽이든 재작업이 아니다
+  await $.tool.call({ tool: 'Edit', file_path: '/r/denied.ts', old_string: 'b', new_string: 'c' })
+  await $.tool.call({ tool: 'Edit', file_path: '/r/a.ts', old_string: 'b', new_string: 'DENY' })
+  expect(toasts.join()).not.toContain('다시 고쳤습니다')
+  await $.tool.call({ tool: 'Edit', file_path: '/r/a.ts', old_string: 'b', new_string: 'c' })
+  expect(toasts.join()).toContain('BOSS가 BEAR의 작업(a.ts)을 다시 고쳤습니다 · 재작업 -4')
+  const roster = JSON.stringify(await $.command.run({ command: 'office', args: 'hr', ...RUN }))
+  expect(roster).toContain('재작업 1')
 })
 
 test('/office hr off면 업무 지시를 건드리지 않고, 평가·명부는 계속 남긴다', async ($, on) => {

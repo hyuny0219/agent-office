@@ -36,7 +36,7 @@ In the desktop app, where `/plugin` does not run: click + next to the prompt box
 | Command | What it does |
 | --- | --- |
 | `/office` | Open the office floor plan pane |
-| `/office hr` | HR records: staff, rank, salary, latest review, done/failed and tool errors by department, plus each department's repeated mistakes |
+| `/office hr` | HR records: staff, rank, salary, latest review, done/failed, tool errors and reworks by department, plus each department's repeated mistakes |
 | `/office hr on` / `off` | Turn the HR memo in task briefs on or off (on by default) |
 
 The floor plan is drawn in pixels in the terminal (72 to 140 columns wide, 27 rows tall). The desktop app and VS Code show the list only.
@@ -56,8 +56,11 @@ The floor plan is drawn in pixels in the terminal (72 to 140 columns wide, 27 ro
 
 - **Departments** come from the agent type: Dev, Research, QA, Planning, Docs and Ops.
 - **Employees**: one nickname is one person. When work comes in, the most experienced employee of that department who is free takes it; if nobody is free, the department hires. Records persist across sessions.
-- **Reviews** use real records only: done +10, failed −5 (killed −3), −1 per tool error or denial (at most −5), +3 for finishing with no errors → grades S, A, B, C, D.
-- **Ranks** follow experience points: 사원 (staff) → 대리 (assistant manager, 20) → 과장 (manager, 60) → 차장 (deputy general manager, 120) → 부장 (general manager, 200). The most experienced member of a department is its team lead.
+- **Reviews** use real records only: done +10, failed −5 (killed −3), −1 per tool error or denial (at most −5), +3 for finishing with no errors after actually using tools → grades S, A, B, C, D.
+  - **Failed check**: finishing while the last test or build command (`npm test`, `tsc`, `pytest`, …; other commands such as `grep` are ignored) failed costs −4.
+  - **Rework**: if BOSS edits a file the employee changed within 10 minutes of them finishing, that job loses 4 points (once per job).
+  - The average review leans on recent work (the latest job weighs 30%).
+- **Ranks** follow experience points: 사원 (staff) → 대리 (assistant manager, 20) → 과장 (manager, 60) → 차장 (deputy general manager, 120) → 부장 (general manager, 200). Penalties take experience away too, so employees can be demoted. The most experienced member of a department is its team lead.
 - **Salary**: base pay by rank + a bonus from the average review + a team-lead allowance.
 
 ### The HR memo in task briefs
@@ -72,10 +75,10 @@ The memo is written in Korean. In English it reads:
 Assignee: Dev team, BEAR, assistant manager (team lead: OWL, manager). Past record: 5 done · 1 failed · 6 tool errors, latest review A.
 Mistakes the Dev team repeated recently. Avoid them this time:
 - Edit "String to replace not found in file." 3 times → Before Edit, Read the part you are changing again and copy the original text exactly
-Review criteria: finish the task, keep tool errors down. When you finish, briefly report what you did, what you checked and the risks that remain.
+Review criteria: finish the task, keep tool errors down, don't finish with a failing test or build. When you finish, briefly report what you did, what you checked and the risks that remain.
 ```
 
-The repeated mistakes are subagents' tool error messages, grouped and counted by department (paths and numbers removed). Only those seen at least twice are added, three at most.
+The repeated mistakes are subagents' tool error messages, grouped and counted by department (paths and numbers removed). Only those seen at least twice are added, most recent first, three at most. Mistakes not seen again for two weeks are left out.
 Turn it off with `/office hr off`. Reviews and salaries keep being recorded either way.
 
 ## Settings

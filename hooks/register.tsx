@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { Dept, HrBook, OfficeActivity, OfficeAgent } from '../types'
-import { assign, briefOf, DEPT_INFO, DEPTS, deptOf, emptyBook, gradeOf, hire, leadOf, learn, rankOf, review, salaryOf, tipOf } from './hr'
+import { assign, briefOf, CHECK_PENALTY, DEPT_INFO, DEPTS, deptOf, emptyBook, gradeOf, handOff, hire, leadOf, learn, migrate, rankOf, review, rework, REWORK_PENALTY, salaryOf, tipOf } from './hr'
 import { activityOf, encodeCells, isMeeting, koNick, layoutOf, nickFor, Office, seated, shortType } from './scene'
 import type { Layout, Leads } from './scene'
 
@@ -37,14 +37,30 @@ const withGwa = (word: string): string => {
   return `${word}${last >= 0xac00 && last <= 0xd7a3 && (last - 0xac00) % 28 !== 0 ? '과' : '와'}`
 }
 
-const isBook = (v: unknown): v is HrBook => typeof v === 'object' && v !== null && (v as HrBook).version === 1 && Array.isArray((v as HrBook).employees)
+/** 파일을 고치는 도구(재작업 판정에 쓴다) */
+const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
+const fileOf = (e: object): string | null => {
+  const { file_path, notebook_path } = e as { file_path?: unknown; notebook_path?: unknown }
+  const f = file_path ?? notebook_path
+  return typeof f === 'string' && f !== '' ? f : null
+}
+const baseName = (f: string): string => f.split('/').pop() ?? f
+/** 테스트·빌드·타입 검사로 보이는 Bash 명령 */
+const CHECK_RE = /\b(test|tests|build|tsc|jest|vitest|pytest|mocha|lint|typecheck|check|cargo|go\s+(test|build|vet)|make|gradle|mvn|ruff|mypy|eslint)\b/
+const isCheckCommand = (e: object): boolean => {
+  const { command } = e as { command?: unknown }
+  return typeof command === 'string' && CHECK_RE.test(command)
+}
 
+let loading: Promise<HrBook> | null = null
 async function hrOf($: EngineInterface): Promise<HrBook> {
-  if (book === null) {
-    const stored = await $.store.get(HR_KEY)
-    book = isBook(stored) ? stored : emptyBook()
-  }
-  return book
+  if (book !== null) return book
+  // 처음 읽는 동안 다른 호출이 와도 같은 읽기를 기다린다(먼저 고친 값을 덮지 않도록)
+  loading ??= $.store.get(HR_KEY).then(stored => {
+    book ??= migrate(stored) ?? emptyBook()
+    return book
+  })
+  return loading
 }
 
 async function saveHr($: EngineInterface, fn: (b: HrBook) => HrBook) {
@@ -129,14 +145,34 @@ async function appraise($: EngineInterface, a: OfficeAgent, isDone: boolean, isK
   const now = await $.clock.now()
   let result: ReturnType<typeof review> | null = null
   await saveHr($, x => {
-    result = review(x, a.nick, { isDone, isKilled, errors: a.errors ?? 0 }, now)
-    return result.book
+    result = review(x, a.nick, { isDone, isKilled, errors: a.errors ?? 0, tools: a.tools, isCheckFailed: a.isCheckFailed }, now)
+    // 끝낸 일의 파일은 남겨 두고, BOSS가 곧 다시 고치면 재작업으로 본다
+    const job = result.book.employees.find(x => x.nick === a.nick)?.jobs ?? 0
+    return isDone ? handOff(result.book, { agentId: a.id, nick: a.nick, files: a.files ?? [], endedAt: now, job }) : result.book
   })
   const r = result as ReturnType<typeof review> | null
   if (r === null) return
   const e = r.book.employees.find(x => x.nick === a.nick)
   const rank = e === undefined ? '' : ` ${rankOf(e.xp).ko}`
-  $.ui.toast(`${a.nick}${rank} 평가 ${gradeOf(r.score)} (${r.score >= 0 ? '+' : ''}${r.score})${r.promotedTo === null ? '' : ` · ${r.promotedTo} 승진!`}`)
+  const why = isDone && a.isCheckFailed === true ? ` · 테스트·빌드 실패한 채 완료 -${CHECK_PENALTY}` : ''
+  $.ui.toast(`${a.nick}${rank} 평가 ${gradeOf(r.score)} (${r.score >= 0 ? '+' : ''}${r.score})${why}${movedText(r)}`)
+}
+
+const movedText = (r: { promotedTo: string | null; demotedTo: string | null }): string =>
+  r.promotedTo !== null ? ` · ${r.promotedTo} 승진!` : r.demotedTo !== null ? ` · ${r.demotedTo}(으)로 강등` : ''
+
+/** BOSS가 파일을 고쳤다: 방금 끝낸 직원의 파일이면 재작업으로 깎는다 */
+async function checkRework($: EngineInterface, file: string) {
+  if ((await hrOf($)).handoffs.length === 0) return
+  const now = await $.clock.now()
+  let r: ReturnType<typeof rework> | null = null
+  await saveHr($, b => {
+    r = rework(b, file, now)
+    return r.book
+  })
+  const hit = r as ReturnType<typeof rework> | null
+  if (hit === null || hit.nick === null) return
+  $.ui.toast(`BOSS가 ${hit.nick}의 작업(${baseName(file)})을 다시 고쳤습니다 · 재작업 -${REWORK_PENALTY}${movedText(hit)}`)
 }
 
 /** $.agent.list()의 상태를 옮긴다(끝남·실패·대기, 이름). 방금 끝난 에이전트는 평가받고, 띄운 쪽에게 보고하러 회의실에 간다. */
@@ -214,7 +250,7 @@ function rosterText(b: HrBook): string {
     lines.push('', `${DEPT_INFO[d].ko}${lead === undefined ? '' : ` — 팀장 ${lead.nick}(${koNick(lead.nick)})`}`)
     for (const e of staffList) {
       const grade = e.lastScore === null ? '-' : gradeOf(e.lastScore)
-      lines.push(`  ${e.nick} ${koNick(e.nick)} · ${rankOf(e.xp).ko} · 연봉 ${won(salaryOf(b, e))}만원 · 최근 평가 ${grade} · 완료 ${e.done} / 실패 ${e.failed} · 도구 오류 ${e.toolErrors} · 경력 ${e.xp}`)
+      lines.push(`  ${e.nick} ${koNick(e.nick)} · ${rankOf(e.xp).ko} · 연봉 ${won(salaryOf(b, e))}만원 · 최근 평가 ${grade} · 완료 ${e.done} / 실패 ${e.failed} · 도구 오류 ${e.toolErrors}${e.reworks > 0 ? ` · 재작업 ${e.reworks}` : ''} · 경력 ${e.xp}`)
     }
   }
   const lessonLines = DEPTS.flatMap(d => (b.lessons[d] ?? []).slice(0, 3).map(l => {
@@ -222,7 +258,8 @@ function rosterText(b: HrBook): string {
     return `  ${DEPT_INFO[d].ko}: ${l.tool} "${l.pattern}" ${l.count}회${tip === null ? '' : ` → ${tip}`}`
   }))
   if (lessonLines.length > 0) lines.push('', '부서별 반복 실수(2회 이상이면 다음 업무 지시에 붙음):', ...lessonLines)
-  lines.push('', '평가: 완료 +10, 실패 -5(중단 -3), 도구 오류 1개당 -1(최대 -5), 오류 없이 완료 +3. 직급: 사원 0 · 대리 20 · 과장 60 · 차장 120 · 부장 200(경력).')
+  lines.push('', `평가: 완료 +10, 실패 -5(중단 -3), 도구 오류 1개당 -1(최대 -5), 오류 없이 완료 +3, 테스트·빌드 실패한 채 완료 -${CHECK_PENALTY}, 끝낸 뒤 BOSS가 같은 파일을 다시 고치면 재작업 -${REWORK_PENALTY}.`,
+    '직급: 사원 0 · 대리 20 · 과장 60 · 차장 120 · 부장 200(경력, 감점이면 깎여 강등). 평균 평가는 최근 일에 무게를 둡니다.')
   return lines.join('\n')
 }
 
@@ -259,7 +296,7 @@ export const register: Register = (on, options) => {
   // 새 에이전트: 부서 직원에게 맡기고(업무 지시 끝에 인사 메모), 띄운 쪽과 회의실에서 지시를 주고받은 뒤 일하러 간다
   on('agent.spawn', async ($, e, next) => {
     const employee = await staff($, e.subagentType)
-    const brief = e.workflow === undefined ? briefOf(await hrOf($), employee) : null
+    const brief = e.workflow === undefined ? briefOf(await hrOf($), employee, await $.clock.now()) : null
     const spawned = await next(brief === null ? e : { ...e, prompt: `${e.prompt}\n\n${brief}` })
     if (spawned.deny !== undefined || spawned.agentId === undefined) return spawned
     const id = spawned.agentId
@@ -306,9 +343,16 @@ export const register: Register = (on, options) => {
       inflight.set(id, left)
       const last = left[left.length - 1]
       const isError = ran !== undefined && (ran.deny !== undefined || ran.isError === true)
+      // 실제로 고친 파일만 센다(거절·실패한 수정은 고친 게 아니다)
+      const file = ran !== undefined && !isError && EDIT_TOOLS.has(e.tool) ? fileOf(e) : null
+      // 테스트·빌드 명령의 결과만 본다(grep의 일치 없음 같은 건 검증 실패가 아니다). 거절은 결과가 아니니 넘긴다
+      const isCheck = e.tool === 'Bash' && ran !== undefined && ran.deny === undefined && isCheckCommand(e)
       await save($, patch(id, a => (a.activity === 'done' || a.activity === 'failed' ? a : {
         ...a, activity: last === undefined ? 'think' : activityOf(last), tool: last ?? a.tool, errors: (a.errors ?? 0) + (isError ? 1 : 0),
+        isCheckFailed: isCheck ? ran?.isError === true : a.isCheckFailed,
+        files: file === null || id === 'main' || (a.files ?? []).includes(file) ? a.files : [...(a.files ?? []), file].slice(-50),
       })))
+      if (file !== null && id === 'main') await checkRework($, file)
       // 서브에이전트의 오류는 부서의 교훈으로 남긴다
       const who = (await agentsOf($)).find(a => a.id === id)
       if (isError && who?.dept !== undefined && ran !== undefined) {

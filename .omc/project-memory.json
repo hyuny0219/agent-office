@@ -1,0 +1,96 @@
+{
+  "version": "1.0.0",
+  "lastScanned": 1792247095008,
+  "projectRoot": "/Users/hyun/Claude/MyProjects/agent-office",
+  "techStack": {
+    "languages": [
+      {
+        "name": "TypeScript",
+        "version": null,
+        "confidence": "high",
+        "markers": [
+          "tsconfig.json"
+        ]
+      }
+    ],
+    "frameworks": [],
+    "packageManager": null,
+    "runtime": null
+  },
+  "build": {
+    "buildCommand": null,
+    "testCommand": null,
+    "lintCommand": null,
+    "devCommand": null,
+    "scripts": {}
+  },
+  "conventions": {
+    "namingStyle": null,
+    "importStyle": null,
+    "testPattern": null,
+    "fileOrganization": null
+  },
+  "structure": {
+    "isMonorepo": false,
+    "workspaces": [],
+    "mainDirectories": [
+      "docs",
+      "scripts"
+    ],
+    "gitBranches": null
+  },
+  "customNotes": [],
+  "directoryMap": {
+    "docs": {
+      "path": "docs",
+      "purpose": "Documentation",
+      "fileCount": 2,
+      "lastAccessed": 1792247094995,
+      "keyFiles": [
+        "office.gif",
+        "office.png"
+      ]
+    },
+    "hooks": {
+      "path": "hooks",
+      "purpose": null,
+      "fileCount": 5,
+      "lastAccessed": 1792247094996,
+      "keyFiles": [
+        "hooks.json",
+        "hr.ts",
+        "office.test.tsx",
+        "register.tsx",
+        "scene.ts"
+      ]
+    },
+    "scripts": {
+      "path": "scripts",
+      "purpose": "Build/utility scripts",
+      "fileCount": 2,
+      "lastAccessed": 1792247094996,
+      "keyFiles": [
+        "render-screenshot.py",
+        "screenshot-frames.mts"
+      ]
+    },
+    "types": {
+      "path": "types",
+      "purpose": "Type definitions",
+      "fileCount": 1,
+      "lastAccessed": 1792247094996,
+      "keyFiles": [
+        "index.d.ts"
+      ]
+    }
+  },
+  "hotPaths": [
+    {
+      "path": "hooks/register.tsx",
+      "accessCount": 1,
+      "lastAccessed": 1792247705061,
+      "type": "file"
+    }
+  ],
+  "userDirectives": []
+}

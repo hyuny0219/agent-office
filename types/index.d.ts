@@ -29,6 +29,10 @@ export type OfficeAgent = {
   dept?: Dept
   /** 이번 일에서 난 도구 오류·거절 수(평가에 쓴다) */
   errors?: number
+  /** 이번 일에서 고친 파일(재작업 판정에 쓴다) */
+  files?: string[]
+  /** 마지막 Bash(테스트·빌드)가 실패했는지. 실패한 채 끝내면 감점 */
+  isCheckFailed?: boolean
 }
 
 export type Dept = 'dev' | 'research' | 'qa' | 'plan' | 'docs' | 'ops'
@@ -44,6 +48,9 @@ export type Employee = {
   done: number
   failed: number
   toolErrors: number
+  /** 끝낸 뒤 BOSS가 같은 파일을 다시 고친 횟수 */
+  reworks: number
+  /** 최근 평가 가중 평균(최근 일이 30%) */
   avgScore: number | null
   lastScore: number | null
   hiredAt: number
@@ -53,10 +60,21 @@ export type Employee = {
 /** 부서가 반복한 도구 오류(같은 도구·같은 문구끼리 센다) */
 export type Lesson = { tool: string; pattern: string; count: number; lastAt: number }
 
+/** 최근에 끝낸 일(재작업 판정용): 이 파일들을 BOSS가 곧 다시 고치면 재작업 */
+export type Handoff = {
+  agentId: string
+  nick: string
+  files: string[]
+  endedAt: number
+  /** 그 직원의 몇 번째 일이었는지(재작업 감점을 그 일의 평가에 맞춰 고친다) */
+  job: number
+}
+
 export type HrBook = {
-  version: 1
+  version: 2
   employees: Employee[]
   lessons: Partial<Record<Dept, Lesson[]>>
+  handoffs: Handoff[]
   /** 업무 지시에 인사 메모를 붙일지(/office hr on|off) */
   isCoaching: boolean
 }
