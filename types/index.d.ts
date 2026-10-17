@@ -39,6 +39,8 @@ export type OfficeAgent = {
   callStreak?: Streak
   /** 야근을 이미 알렸는지 */
   isOvertimeNoticed?: boolean
+  /** 교육 효과 측정 중이면 이번 업무의 실험 기록 */
+  trial?: TrialTicket
 }
 
 /** 같은 것이 연달아 몇 번 났는지 */
@@ -69,7 +71,26 @@ export type Employee = {
 }
 
 /** 부서가 반복한 도구 오류(같은 도구·같은 문구끼리 센다) */
-export type Lesson = { tool: string; pattern: string; count: number; lastAt: number }
+export type Lesson = {
+  tool: string
+  pattern: string
+  count: number
+  lastAt: number
+}
+
+/** 실수 하나(교훈 열쇠)의 교육 효과 측정: 메모에 붙인 업무·뺀 업무(비교군)와 그중 재발한 수 */
+export type TrialStats = {
+  memo: { jobs: number; hits: number }
+  control: { jobs: number; hits: number }
+  lastAt: number
+  /** 메모를 붙여도 재발이 줄지 않는다고 판정한 때. 그 뒤 한동안 메모에서 빼고, 지나면 다시 잰다 */
+  ineffectiveAt?: number
+}
+
+export type TrialArm = 'memo' | 'control'
+
+/** 이번 업무가 어느 쪽에 들었고, 실험 중인 교훈 중 무엇이 재발했는지 */
+export type TrialTicket = { arm: TrialArm; keys: string[]; hits: string[] }
 
 /** 최근에 끝낸 일(재작업 판정용): 이 파일들을 BOSS가 곧 다시 고치면 재작업 */
 export type Handoff = {
@@ -88,6 +109,12 @@ export type HrBook = {
   handoffs: Handoff[]
   /** 업무 지시에 인사 메모를 붙일지(/office hr on|off) */
   isCoaching: boolean
+  /** 교육 효과 측정(비교군 두기)을 할지(/office hr ab on|off) */
+  isTrialing: boolean
+  /** 실험에 넣은 업무 순번(비교군을 고르는 데 쓴다) */
+  trialSeq: number
+  /** 교훈 열쇠(도구|문구) → 교육 효과 측정. 교훈 목록이 밀려나도 남도록 따로 둔다 */
+  trials: Record<string, TrialStats>
 }
 
 declare module 'claude-code' {

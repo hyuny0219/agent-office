@@ -78,7 +78,7 @@ export const scoreOf = (r: JobResult): number => {
 
 export const gradeOf = (score: number): string => (score >= 13 ? 'S' : score >= 10 ? 'A' : score >= 6 ? 'B' : score >= 0 ? 'C' : 'D')
 
-export const emptyBook = (): HrBook => ({ version: 2, employees: [], lessons: {}, handoffs: [], isCoaching: true })
+export const emptyBook = (): HrBook => ({ version: 2, employees: [], lessons: {}, handoffs: [], isCoaching: true, isTrialing: true, trialSeq: 0, trials: {} })
 
 /**
  * 저장된 인사 기록을 지금 형식으로 옮긴다. 예전 판(version 1)이나 모르는 판이라도 직원 명부가 있으면
@@ -109,7 +109,21 @@ export function migrate(stored: unknown): HrBook | null {
   }
   const handoffs = (Array.isArray(v.handoffs) ? v.handoffs : []).filter((x): x is Handoff =>
     typeof x?.agentId === 'string' && typeof x.nick === 'string' && Array.isArray(x.files) && typeof x.endedAt === 'number' && typeof x.job === 'number')
-  return { ...v, version: 2, employees, lessons, handoffs, isCoaching: v.isCoaching !== false }
+  const arm = (x: unknown) => {
+    const a = (typeof x === 'object' && x !== null ? x : {}) as Record<string, unknown>
+    return { jobs: num(a.jobs, 0), hits: num(a.hits, 0) }
+  }
+  const trials: HrBook['trials'] = {}
+  for (const [k, x] of Object.entries(typeof v.trials === 'object' && v.trials !== null ? v.trials as Record<string, unknown> : {})) {
+    if (typeof x !== 'object' || x === null) continue
+    const s = x as Record<string, unknown>
+    const at = numOrNull(s.ineffectiveAt)
+    trials[k] = { memo: arm(s.memo), control: arm(s.control), lastAt: num(s.lastAt, 0), ...(at === null ? {} : { ineffectiveAt: at }) }
+  }
+  return {
+    ...v, version: 2, employees, lessons, handoffs, trials,
+    isCoaching: v.isCoaching !== false, isTrialing: v.isTrialing !== false, trialSeq: num(v.trialSeq, 0),
+  }
 }
 
 /** 최근 평가 가중 평균: 최근 일이 30%를 차지한다 */
@@ -238,11 +252,33 @@ export function learn(book: HrBook, dept: Dept, tool: string, text: string, now:
   return { ...book, lessons: { ...book.lessons, [dept]: kept } }
 }
 
+/** 교훈의 열쇠(같은 도구·같은 문구) */
+export const lessonKey = (l: Pick<Lesson, 'tool' | 'pattern'>): string => `${l.tool}|${l.pattern}`
+
+/** 효과 없다고 판정된 실수를 메모에서 빼 두는 기간. 지나면 처음부터 다시 잰다 */
+export const RETEST_MS = 14 * 24 * 60 * 60_000
+
+/** 효과 측정 중이고, 효과 없다고 판정된 지 얼마 안 돼 메모에서 빼 둔 실수인가 */
+export function isMuted(book: HrBook, l: Pick<Lesson, 'tool' | 'pattern'>, now: number): boolean {
+  const at = book.trials[lessonKey(l)]?.ineffectiveAt
+  return book.isTrialing && at !== undefined && now - at < RETEST_MS
+}
+
+/**
+ * 메모에 붙일 부서의 실수: 2회 이상, 최근에 난 것부터 3개. now를 주면 2주 넘게 안 난 것과,
+ * 효과 측정에서 효과 없다고 나와 빼 둔 것은 뺀다.
+ */
+export const lessonsFor = (book: HrBook, dept: Dept, now?: number): Lesson[] =>
+  (book.lessons[dept] ?? [])
+    .filter(l => l.count >= 2 && (now === undefined || (now - l.lastAt <= LESSON_TTL_MS && !isMuted(book, l, now))))
+    .sort((a, b) => b.lastAt - a.lastAt)
+    .slice(0, 3)
+
 /**
  * 업무 지시 끝에 붙일 인사 메모(짧게). 코칭이 꺼져 있으면 null.
- * 실수는 최근에 난 것부터 붙이고, now를 주면 2주 넘게 안 난 것은 뺀다.
+ * lessons를 주면 그 실수를 붙이고(비교군이면 빈 목록), 안 주면 lessonsFor로 고른다.
  */
-export function briefOf(book: HrBook, e: Employee, now?: number): string | null {
+export function briefOf(book: HrBook, e: Employee, now?: number, lessons: readonly Lesson[] = lessonsFor(book, e.dept, now)): string | null {
   if (!book.isCoaching) return null
   const dept = DEPT_INFO[e.dept]
   const lead = leadOf(book, e.dept)
@@ -252,10 +288,6 @@ export function briefOf(book: HrBook, e: Employee, now?: number): string | null 
     `담당: ${dept.ko} ${e.nick} ${rank}${lead !== undefined && lead.nick !== e.nick ? ` (팀장 ${lead.nick} ${rankOf(lead.xp).ko})` : lead?.nick === e.nick ? ' · 팀장' : ''}.` +
       (e.jobs > 0 ? ` 지난 기록: 완료 ${e.done} · 실패 ${e.failed} · 도구 오류 ${e.toolErrors}${e.reworks > 0 ? ` · 재작업 ${e.reworks}` : ''}${e.alarms > 0 ? ` · 근태 알림 ${e.alarms}` : ''}, 최근 평가 ${gradeOf(e.lastScore ?? 0)}.` : ' 첫 업무입니다.'),
   ]
-  const lessons = (book.lessons[e.dept] ?? [])
-    .filter(l => l.count >= 2 && (now === undefined || now - l.lastAt <= LESSON_TTL_MS))
-    .sort((a, b) => b.lastAt - a.lastAt)
-    .slice(0, 3)
   if (lessons.length > 0) {
     lines.push(`${dept.ko}이 최근 반복한 실수입니다. 이번에는 피하세요:`)
     for (const l of lessons) {

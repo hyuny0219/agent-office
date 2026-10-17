@@ -38,6 +38,7 @@ In the desktop app, where `/plugin` does not run: click + next to the prompt box
 | `/office` | Open the office floor plan pane |
 | `/office hr` | HR records: staff, rank, salary, latest review, done/failed, tool errors, reworks and attendance alerts by department, plus each department's repeated mistakes |
 | `/office hr on` / `off` | Turn the HR memo in task briefs and the attendance notices on or off (on by default) |
+| `/office hr ab on` / `off` | Turn training-effect measurement (a control group that gets no mistake list) on or off (on by default) |
 
 The floor plan is drawn in pixels in the terminal (72 to 140 columns wide, 27 rows tall). The desktop app and VS Code show the list only.
 
@@ -91,6 +92,15 @@ Review criteria: finish the task, keep tool errors down, don't finish with a fai
 The repeated mistakes are subagents' tool error messages, grouped and counted by department (paths and numbers removed). Only those seen at least twice are added, most recent first, three at most. Mistakes not seen again for two weeks are left out.
 Turn it off with `/office hr off`. Reviews and salaries keep being recorded either way.
 
+
+### Measuring the training effect
+
+The office checks whether the mistake list in the memo actually prevents repeats.
+
+- Of the jobs that would get a mistake list, **one in five gets the memo without the list** (the control group). The rest of the memo is the same.
+- If a listed mistake happens again during the job it counts as a repeat. When the job ends, repeat rates are added per mistake for the memo group and the control group. `/office hr` shows lines like `measuring: memo 1 repeat in 8 jobs (13%) / control 2 in 3 (67%)` (in Korean).
+- A verdict needs 10 memo jobs, 5 control jobs and at least 2 repeats in the control group, so rare mistakes are not dropped on no evidence. If the memo-group repeat rate is then not lower, the mistake is marked **no effect**, left out of the memo **for two weeks**, and measured again from scratch after that.
+- To stop holding back the list, run `/office hr ab off`. Mistakes that were left out come back, and the collected numbers are kept.
 ## Settings
 
 The agent-office entry in `/config`:

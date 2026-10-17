@@ -1,8 +1,9 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Dept, HrBook, OfficeActivity, OfficeAgent, Streak } from '../types'
-import { assign, briefOf, CHECK_PENALTY, DEPT_INFO, DEPTS, deptOf, emptyBook, gradeOf, handOff, hire, leadOf, learn, migrate, warn, rankOf, review, rework, REWORK_PENALTY, salaryOf, tipOf } from './hr'
+import type { Dept, HrBook, OfficeActivity, OfficeAgent, Streak, TrialTicket } from '../types'
+import { assign, briefOf, CHECK_PENALTY, DEPT_INFO, DEPTS, deptOf, emptyBook, gradeOf, handOff, hire, isMuted, leadOf, learn, lessonKey, lessonsFor, migrate, warn, rankOf, review, rework, REWORK_PENALTY, salaryOf, tipOf } from './hr'
+import { CONTROL_EVERY, effectText, enroll, errorLessonKey, markHit, settle } from './trial'
 import { callKeyOf, ERROR_STREAK, errorKeyOf, errorToast, isAlarm, isOvertime, isPolling, nudgeOf, REPEAT_STREAK, repeatToast, stepOf } from './watch'
 import { activityOf, encodeCells, isMeeting, koNick, layoutOf, nickFor, Office, seated, shortType } from './scene'
 import type { Layout, Leads } from './scene'
@@ -143,6 +144,18 @@ async function ensure($: EngineInterface, id: string) {
 /** 끝난 일을 평가해 인사 기록에 반영하고 알린다 */
 async function appraise($: EngineInterface, a: OfficeAgent, isDone: boolean, isKilled: boolean) {
   if (a.id === 'main') return
+  // 교육 효과 측정: 이번 업무가 든 쪽과 재발한 실수를 교훈별로 더한다(지금 사본에서 읽는다: 동기화 뒤에 적힌 재발도 들도록)
+  // 집계한 업무에서는 실험 기록을 지운다(같은 업무를 두 번 세지 않도록)
+  let ticket: TrialTicket | undefined
+  await save($, patch(a.id, x => {
+    ticket = x.trial
+    return x.trial === undefined ? x : { ...x, trial: undefined }
+  }))
+  const settled = ticket as TrialTicket | undefined
+  if (settled !== undefined) {
+    const at = await $.clock.now()
+    await saveHr($, x => settle(x, settled, at))
+  }
   const b = await hrOf($)
   if (!b.employees.some(e => e.nick === a.nick)) await saveHr($, x => hire(x, a.nick, a.dept ?? deptOf(a.type), a.type, a.startedAt).book)
   const now = await $.clock.now()
@@ -178,8 +191,17 @@ async function checkRework($: EngineInterface, file: string) {
   $.ui.toast(`BOSS가 ${hit.nick}의 작업(${baseName(file)})을 다시 고쳤습니다 · 재작업 -${REWORK_PENALTY}${movedText(hit)}`)
 }
 
+let syncing: Promise<void> | null = null
+/** 동기화는 한 번에 하나만 돈다: 겹치면 같은 에이전트를 두 번 평가한다 */
+function syncStatus($: EngineInterface): Promise<void> {
+  syncing ??= syncOnce($).finally(() => {
+    syncing = null
+  })
+  return syncing
+}
+
 /** $.agent.list()의 상태를 옮긴다(끝남·실패·대기, 이름). 방금 끝난 에이전트는 평가받고, 띄운 쪽에게 보고하러 회의실에 간다. */
-async function syncStatus($: EngineInterface) {
+async function syncOnce($: EngineInterface) {
   const infos = await $.agent.list()
   const now = await $.clock.now()
   const known = await agentsOf($)
@@ -292,9 +314,9 @@ async function watch($: EngineInterface, id: string, e: { tool: string } & objec
 }
 
 /** /office hr: 부서별 직원·직급·연봉·평가, 부서가 반복한 실수 */
-function rosterText(b: HrBook): string {
+function rosterText(b: HrBook, now: number): string {
   const won = (n: number) => n.toLocaleString('en-US')
-  const lines = [`에이전트 사무실 인사 기록 (업무 지시 인사 메모: ${b.isCoaching ? '켜짐' : '꺼짐'})`]
+  const lines = [`에이전트 사무실 인사 기록 (업무 지시 인사 메모: ${b.isCoaching ? '켜짐' : '꺼짐'} · 교육 효과 측정: ${b.isTrialing ? '켜짐' : '꺼짐'})`]
   if (b.employees.length === 0) lines.push('아직 직원이 없습니다. 서브에이전트가 일을 맡으면 부서에 배치됩니다.')
   for (const d of DEPTS) {
     const staffList = b.employees.filter(e => e.dept === d).sort((x, y) => y.xp - x.xp)
@@ -308,9 +330,12 @@ function rosterText(b: HrBook): string {
   }
   const lessonLines = DEPTS.flatMap(d => (b.lessons[d] ?? []).slice(0, 3).map(l => {
     const tip = tipOf(l.pattern)
-    return `  ${DEPT_INFO[d].ko}: ${l.tool} "${l.pattern}" ${l.count}회${tip === null ? '' : ` → ${tip}`}`
+    return `  ${DEPT_INFO[d].ko}: ${l.tool} "${l.pattern}" ${l.count}회${tip === null ? '' : ` → ${tip}`}${effectText(b.trials[lessonKey(l)], isMuted(b, l, now))}`
   }))
-  if (lessonLines.length > 0) lines.push('', '부서별 반복 실수(2회 이상이면 다음 업무 지시에 붙음):', ...lessonLines)
+  if (lessonLines.length > 0) {
+    lines.push('', '부서별 반복 실수(2회 이상이면 다음 업무 지시에 붙음):', ...lessonLines)
+    if (b.isTrialing) lines.push(`  효과: 실수 목록을 ${CONTROL_EVERY}건에 한 건은 빼고 보내 재발률을 비교합니다. 근거가 모였는데 붙여도 재발이 줄지 않으면 2주 동안 메모에서 뺐다가 다시 잽니다.`)
+  }
   lines.push('', `평가: 완료 +10, 실패 -5(중단 -3), 도구 오류 1개당 -1(최대 -5), 오류 없이 완료 +3, 테스트·빌드 실패한 채 완료 -${CHECK_PENALTY}, 끝낸 뒤 BOSS가 같은 파일을 다시 고치면 재작업 -${REWORK_PENALTY}.`,
     '직급: 사원 0 · 대리 20 · 과장 60 · 차장 120 · 부장 200(경력, 감점이면 깎여 강등). 평균 평가는 최근 일에 무게를 둡니다.')
   return lines.join('\n')
@@ -324,21 +349,27 @@ export const register: Register = (on, options) => {
     const started = await next(e)
     await $.command.register({
       name: 'office',
-      description: '에이전트 사무실 평면도 보기. hr: 인사 기록(부서·직급·연봉·평가), hr on|off: 업무 지시 인사 메모 켜고 끄기',
-      argumentHint: '[hr [on|off]]',
+      description: '에이전트 사무실 평면도 보기. hr: 인사 기록(부서·직급·연봉·평가), hr on|off: 업무 지시 인사 메모 켜고 끄기, hr ab on|off: 교육 효과 측정(비교군) 켜고 끄기',
+      argumentHint: '[hr [on|off|ab on|off]]',
     })
     $.clock.every(FRAME_MS, () => void tick($).catch(() => undefined))
     return started
   })
 
   on('command.run', { command: 'office' }, async ($, e) => {
-    const [sub, arg] = e.args.trim().split(/\s+/)
+    const [sub, arg, arg2] = e.args.trim().split(/\s+/)
+    if (sub === 'hr' && arg === 'ab' && (arg2 === 'on' || arg2 === 'off')) {
+      await saveHr($, b => ({ ...b, isTrialing: arg2 === 'on' }))
+      return { text: arg2 === 'on'
+        ? `교육 효과를 잽니다: 실수 목록을 붙일 업무 ${CONTROL_EVERY}건에 한 건은 빼고 보내(비교군), 재발률을 비교합니다.`
+        : '교육 효과 측정을 멈춥니다. 실수 목록은 모든 업무에 붙입니다(쌓인 측정 기록은 남깁니다).' }
+    }
     if (sub === 'hr') {
       if (arg === 'on' || arg === 'off') {
         await saveHr($, b => ({ ...b, isCoaching: arg === 'on' }))
         return { text: arg === 'on' ? '업무 지시에 인사 메모(담당·지난 기록·부서가 반복한 실수·평가 기준)를 붙입니다.' : '업무 지시에 인사 메모를 붙이지 않습니다. 평가·연봉은 계속 기록합니다.' }
       }
-      return { text: rosterText(await hrOf($)) }
+      return { text: rosterText(await hrOf($), await $.clock.now()) }
     }
     await ensure($, 'main')
     const opened = await $.ui.open({ id: PANE, title: '에이전트 사무실' })
@@ -349,14 +380,29 @@ export const register: Register = (on, options) => {
   // 새 에이전트: 부서 직원에게 맡기고(업무 지시 끝에 인사 메모), 띄운 쪽과 회의실에서 지시를 주고받은 뒤 일하러 간다
   on('agent.spawn', async ($, e, next) => {
     const employee = await staff($, e.subagentType)
-    const brief = e.workflow === undefined ? briefOf(await hrOf($), employee, await $.clock.now()) : null
+    const at = await $.clock.now()
+    let brief: string | null = null
+    let trial: TrialTicket | undefined
+    if (e.workflow === undefined && (await hrOf($)).isCoaching) {
+      const lessons = lessonsFor(await hrOf($), employee.dept, at)
+      const keys = lessons.map(lessonKey)
+      let enrolled: ReturnType<typeof enroll> = null
+      await saveHr($, b => {
+        enrolled = enroll(b, keys)
+        return enrolled?.book ?? b
+      })
+      const arm = (enrolled as ReturnType<typeof enroll>)?.arm
+      if (arm !== undefined) trial = { arm, keys, hits: [] }
+      // 비교군은 실수 목록만 뺀다(나머지 메모는 같게 두어 실수 목록의 효과만 본다)
+      brief = briefOf(await hrOf($), employee, at, arm === 'control' ? [] : lessons)
+    }
     const spawned = await next(brief === null ? e : { ...e, prompt: `${e.prompt}\n\n${brief}` })
     if (spawned.deny !== undefined || spawned.agentId === undefined) return spawned
     const id = spawned.agentId
     const parentId = e.parentAgentId ?? 'main'
     const now = await $.clock.now()
     await ensure($, parentId)
-    await admit($, { ...fresh(id, e.subagentType, e.description, now), model: spawned.model, parentId }, employee.nick, meet([parentId, id], now + MEET_MS))
+    await admit($, { ...fresh(id, e.subagentType, e.description, now), model: spawned.model, parentId, trial }, employee.nick, meet([parentId, id], now + MEET_MS))
     return spawned
   })
 
@@ -401,6 +447,9 @@ export const register: Register = (on, options) => {
       const file = ran !== undefined && !isError && EDIT_TOOLS.has(e.tool) ? fileOf(e) : null
       // 테스트·빌드 명령의 결과만 본다(grep의 일치 없음 같은 건 검증 실패가 아니다). 거절은 결과가 아니니 넘긴다
       const isCheck = e.tool === 'Bash' && ran !== undefined && ran.deny === undefined && isCheckCommand(e)
+      // 실험 중인 실수가 다시 났으면 오류를 세는 바로 이 저장에서 적는다(곧 끝나 집계돼도 빠지지 않도록)
+      const hitKey = isError && ran !== undefined ? errorLessonKey(e.tool, ran.deny ?? ran.text ?? '') : null
+      await save($, patch(id, a => (a.trial !== undefined && hitKey !== null ? { ...a, trial: markHit(a.trial, hitKey) } : a)))
       await save($, patch(id, a => (a.activity === 'done' || a.activity === 'failed' ? a : {
         ...a, activity: last === undefined ? 'think' : activityOf(last), tool: last ?? a.tool, errors: (a.errors ?? 0) + (isError ? 1 : 0),
         isCheckFailed: isCheck ? ran?.isError === true : a.isCheckFailed,

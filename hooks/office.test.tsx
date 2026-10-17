@@ -1,7 +1,8 @@
 import { expect, test } from 'claude-code/testing'
 
 import type { HrBook, OfficeAgent } from '../types'
-import { briefOf, deptOf, emptyBook, gradeOf, handOff, hire, leadOf, learn, LESSON_TTL_MS, migrate, patternOf, rankOf, review, rework, REWORK_MS, salaryOf, scoreOf, tipOf } from './hr'
+import { briefOf, deptOf, emptyBook, gradeOf, handOff, hire, isMuted, leadOf, learn, LESSON_TTL_MS, lessonKey, migrate, RETEST_MS, patternOf, rankOf, review, rework, REWORK_MS, salaryOf, scoreOf, tipOf } from './hr'
+import { CONTROL_EVERY, effectText, enroll, markHit, MIN_CONTROL, MIN_MEMO, settle, verdictOf } from './trial'
 import { callKeyOf, errorKeyOf, isAlarm, isOvertime, isPolling, nudgeOf, OVERTIME_MS, stepOf } from './watch'
 import { activityOf, encodeCells, koNick, layoutOf, nickFor, Office, PLAN_ROWS } from './scene'
 
@@ -176,6 +177,58 @@ test('근태: 같은 것을 연달아 세고, 문턱과 그 배수마다 알리�
   expect(isPolling('Grep')).toBe(false)
   expect(isOvertime(0, null, OVERTIME_MS)).toBe(true)
   expect(isOvertime(0, 5, OVERTIME_MS)).toBe(false)
+})
+
+test('교육 효과: 순번으로 비교군을 두고, 근거가 모여야 판정하며, 효과 없는 실수는 2주 동안만 빼고 다시 잰다', () => {
+  let b = hire(emptyBook(), 'BEAR', 'dev', 'builder', 1).book
+  b = learn(learn(b, 'dev', 'Edit', 'String to replace not found in file.', 5), 'dev', 'Edit', 'String to replace not found in file.', 6)
+  const lesson = b.lessons.dev![0]!
+  const key = lessonKey(lesson)
+  expect(enroll(b, [])).toBeNull()
+  expect(enroll({ ...b, isTrialing: false }, [key])).toBeNull()
+  const arms: string[] = []
+  for (let i = 0; i < CONTROL_EVERY; i++) {
+    const r = enroll(b, [key])!
+    arms.push(r.arm)
+    b = r.book
+  }
+  expect(arms).toEqual(['memo', 'memo', 'memo', 'memo', 'control'])
+  expect(markHit({ arm: 'memo', keys: [key], hits: [] }, 'Bash|other').hits).toEqual([])
+
+  const run = (book: HrBook, memoHits: number, controlHits: number, at: number) => {
+    for (let i = 0; i < MIN_MEMO; i++) book = settle(book, { arm: 'memo', keys: [key], hits: i < memoHits ? [key] : [] }, at)
+    for (let i = 0; i < MIN_CONTROL; i++) book = settle(book, { arm: 'control', keys: [key], hits: i < controlHits ? [key] : [] }, at)
+    return book
+  }
+  // 드문 실수(둘 다 재발 없음)나 비교군 재발이 적으면 모른다: 근거 없이 빼지 않는다
+  expect(verdictOf(run(b, 0, 0, 10).trials[key])).toBe('unknown')
+  expect(verdictOf(run(b, 5, 1, 10).trials[key])).toBe('unknown')
+  // 메모군 재발이 더 적으면 효과 있음
+  expect(verdictOf(run(b, 1, 3, 10).trials[key])).toBe('effective')
+
+  // 붙여도 비교군만큼 재발: 효과 없음 → 2주 동안 메모에서 빠진다
+  const bad = run(b, 6, 3, 10)
+  expect(verdictOf(bad.trials[key])).toBe('ineffective')
+  expect(bad.trials[key]?.ineffectiveAt).toBe(10)
+  expect(isMuted(bad, lesson, 11)).toBe(true)
+  expect(effectText(bad.trials[key], true)).toContain('효과 없음(2주 동안 메모에서 뺀 뒤 다시 잼): 메모 10건 중 재발 6(60%) / 비교군 5건 중 재발 3(60%)')
+  expect(briefOf(bad, bad.employees[0]!, 11)).not.toContain('반복한 실수')
+  // 측정을 끄면 다시 붙는다
+  expect(briefOf({ ...bad, isTrialing: false }, bad.employees[0]!, 11)).toContain('반복한 실수')
+  // 2주가 지나면 다시 붙고, 다음 집계는 처음부터 센다
+  expect(isMuted(bad, lesson, 10 + RETEST_MS)).toBe(false)
+  const again = settle(bad, { arm: 'memo', keys: [key], hits: [] }, 10 + RETEST_MS)
+  expect(again.trials[key]).toEqual({ memo: { jobs: 1, hits: 0 }, control: { jobs: 0, hits: 0 }, lastAt: 10 + RETEST_MS })
+
+  // 교훈이 밀려나도 측정 기록은 남는다
+  let evicted = bad
+  for (let i = 0; i < 8; i++) evicted = learn(evicted, 'dev', 'Bash', `other ${'abcdefgh'[i]}`, 100 + i)
+  expect(evicted.lessons.dev!.some(l => lessonKey(l) === key)).toBe(false)
+  expect(evicted.trials[key]).toBeDefined()
+
+  // 망가진 측정 기록도 고쳐 받는다
+  const odd = migrate({ employees: [], trials: { [key]: { memo: {}, lastAt: 'x' }, bad: 3 } })!
+  expect(odd.trials).toEqual({ [key]: { memo: { jobs: 0, hits: 0 }, control: { jobs: 0, hits: 0 }, lastAt: 0 } })
 })
 
 test('평면도: 방 표지, 부서 섬 표지와 명패, 셀 인코딩', () => {
@@ -439,6 +492,54 @@ test('근태 경계: 폴링은 알림을 다시 울리지 않고, 거절은 세�
   expect(count('야근 중')).toBe(1)
   expect(count('야근 중입니다: d1')).toBe(1)
   expect(count('야근 중입니다: d2')).toBe(0)
+})
+
+test('교육 효과 측정: 다섯 번째 업무는 실수 목록 없이 보내고, 일하는 동안 재발을 적어, 끝나면 인사 기록에 효과가 쌓인다', async ($, on) => {
+  let book = hire(emptyBook(), 'BEAR', 'dev', 'builder', 1).book
+  book = learn(learn(book, 'dev', 'Edit', 'String to replace not found in file.', 5), 'dev', 'Edit', 'String to replace not found in file.', 6)
+  const store = new Map<string, unknown>([['hr', book]])
+  on('store.get', (_$, e) => ({ value: store.get(e.key) }))
+  on('store.set', (_$, e) => {
+    store.set(e.key, e.value)
+    return { value: undefined }
+  })
+  on('clock.now', () => ({ value: 100 }))
+  const prompts: string[] = []
+  let n = 0
+  on('agent.spawn', (_$, e) => {
+    prompts.push(e.prompt)
+    return { model: 'm', agentId: `e${++n}` }
+  })
+  const status: Record<string, 'running' | 'completed'> = {}
+  on('agent.list', () => ({ value: Object.entries(status).map(([id, s]) => ({ id, description: id, type: 'builder', status: s })) }))
+  on('ui.toast', () => ({ value: undefined }))
+  on('tool.call', () => ({ result: 'x', isError: true, text: 'String to replace not found in file.' }))
+  on('turn.complete', () => ({ text: '' }))
+
+  for (let i = 1; i <= 5; i++) {
+    await $.agent.spawn({ tool_use_id: `s${i}`, prompt: `일${i}`, description: `일${i}`, subagentType: 'builder', ...SPAWN })
+    status[`e${i}`] = 'running'
+  }
+  expect(prompts.slice(0, 4).every(p => p.includes('반복한 실수'))).toBe(true)
+  // 비교군: 실수 목록만 빠지고 메모의 나머지는 같다
+  expect(prompts[4]).not.toContain('반복한 실수')
+  expect(prompts[4]).toContain('[사내 인사 메모 · agent-office]')
+
+  // e1(메모군)은 그 실수를 다시 내고, e5(비교군)도 다시 낸다. e2는 깨끗이 끝낸다
+  await $.tool.call({ tool: 'Edit', file_path: '/r/a.ts', old_string: 'a', new_string: 'b', agentId: 'e1' })
+  await $.tool.call({ tool: 'Edit', file_path: '/r/a.ts', old_string: 'a', new_string: 'b', agentId: 'e5' })
+  for (const id of ['e1', 'e2', 'e5']) status[id] = 'completed'
+  await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 'v', agentId: 'e1', reason: 'answer' })
+  // 다시 동기화해도 같은 업무를 두 번 세지 않는다
+  await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 'v2', agentId: 'e2', reason: 'answer' })
+  const roster = JSON.stringify(await $.command.run({ command: 'office', args: 'hr', ...RUN }))
+  expect(roster).toContain('측정 중: 메모 2건 중 재발 1(50%) / 비교군 1건 중 재발 1(100%)')
+  expect(roster).toContain('교육 효과 측정: 켜짐')
+
+  const off = JSON.stringify(await $.command.run({ command: 'office', args: 'hr ab off', ...RUN }))
+  expect(off).toContain('멈춥니다')
+  await $.agent.spawn({ tool_use_id: 's6', prompt: '일6', description: '일6', subagentType: 'builder', ...SPAWN })
+  expect(prompts[5]).toContain('반복한 실수')
 })
 
 test('/office hr off면 업무 지시를 건드리지 않고, 평가·명부는 계속 남긴다', async ($, on) => {

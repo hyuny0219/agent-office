@@ -83,10 +83,52 @@
       "synthetic": true,
       "telemetry_status": "unmatched_stop",
       "telemetry_note": "SubagentStop arrived without a matching SubagentStart; native Agent/Task start telemetry was not observed."
+    },
+    {
+      "agent_id": "a59b3690f41cc8009",
+      "agent_type": "oh-my-claudecode:code-reviewer",
+      "started_at": "2026-10-17T14:54:29.954Z",
+      "parent_mode": "none",
+      "status": "completed",
+      "completed_at": "2026-10-17T14:56:08.979Z",
+      "duration_ms": 99025
+    },
+    {
+      "agent_id": "acf2a1822aa006329",
+      "agent_type": "untracked-native-fork",
+      "started_at": "2026-10-17T14:55:01.581Z",
+      "parent_mode": "none",
+      "status": "completed",
+      "completed_at": "2026-10-17T14:55:01.581Z",
+      "synthetic": true,
+      "telemetry_status": "unmatched_stop",
+      "telemetry_note": "SubagentStop arrived without a matching SubagentStart; native Agent/Task start telemetry was not observed."
+    },
+    {
+      "agent_id": "abfe11d180a1a22bd",
+      "agent_type": "untracked-native-fork",
+      "started_at": "2026-10-17T14:55:33.173Z",
+      "parent_mode": "none",
+      "status": "completed",
+      "completed_at": "2026-10-17T14:55:33.173Z",
+      "synthetic": true,
+      "telemetry_status": "unmatched_stop",
+      "telemetry_note": "SubagentStop arrived without a matching SubagentStart; native Agent/Task start telemetry was not observed."
+    },
+    {
+      "agent_id": "ac9d337fa1b69739c",
+      "agent_type": "untracked-native-fork",
+      "started_at": "2026-10-17T14:56:04.760Z",
+      "parent_mode": "none",
+      "status": "completed",
+      "completed_at": "2026-10-17T14:56:04.760Z",
+      "synthetic": true,
+      "telemetry_status": "unmatched_stop",
+      "telemetry_note": "SubagentStop arrived without a matching SubagentStart; native Agent/Task start telemetry was not observed."
     }
   ],
-  "total_spawned": 2,
-  "total_completed": 10,
+  "total_spawned": 3,
+  "total_completed": 15,
   "total_failed": 0,
-  "last_updated": "2026-10-17T14:47:12.507Z"
+  "last_updated": "2026-10-17T14:56:08.982Z"
 }
