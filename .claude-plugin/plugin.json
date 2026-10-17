@@ -1,0 +1,25 @@
+{
+  "name": "agent-office",
+  "version": "0.2.0",
+  "description": "서브에이전트들이 일하는 모습을 게임 속 사무실 평면도로 보여 주고(/office), 부서·직급·연봉·평가 인사 제도로 반복 실수를 다음 업무 지시에 알려 주는 Claude Code mod",
+  "author": {
+    "name": "hyuny0219"
+  },
+  "repository": "https://github.com/hyuny0219/agent-office",
+  "keywords": [
+    "agents",
+    "subagents",
+    "pane",
+    "pixel-art",
+    "office"
+  ],
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "attachTo": {
+      "type": "string",
+      "title": "함께 붙일 패널 id",
+      "description": "다른 mod가 여는 사이드 패널의 id. 적으면 그 패널 아래에도 사무실 평면도를 붙입니다(비우면 /office 패널에만).",
+      "default": ""
+    }
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "name": "agent-office",
+  "owner": {
+    "name": "hyuny0219"
+  },
+  "description": "서브에이전트를 게임 속 사무실로 보여 주는 Claude Code mod",
+  "plugins": [
+    {
+      "name": "agent-office",
+      "source": "./"
+    }
+  ]
+}
