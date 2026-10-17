@@ -41,6 +41,8 @@ export type OfficeAgent = {
   isOvertimeNoticed?: boolean
   /** 교육 효과 측정 중이면 이번 업무의 실험 기록 */
   trial?: TrialTicket
+  /** 이번 일에서 받은 근태 알림 수 */
+  alarms?: number
 }
 
 /** 같은 것이 연달아 몇 번 났는지 */
@@ -102,6 +104,29 @@ export type Handoff = {
   job: number
 }
 
+/** 끝낸 일 한 건(보고서·인사카드용) */
+export type JobRecord = {
+  nick: string
+  dept: Dept
+  /** 그 직원의 몇 번째 일이었는지(재작업을 이 기록에 맞춰 적는다) */
+  job: number
+  description: string
+  startedAt: number
+  endedAt: number
+  outcome: 'done' | 'failed' | 'killed'
+  /** 평가 점수(재작업이면 깎인 뒤) */
+  score: number
+  errors: number
+  /** 테스트·빌드가 실패한 채 완료했는지 */
+  isCheckFailed: boolean
+  /** 끝낸 뒤 BOSS가 같은 파일을 다시 고쳤는지 */
+  isReworked: boolean
+  /** 그 일에서 받은 근태 알림 수 */
+  alarms: number
+  /** 그때 연봉(만원, 인건비 계산용). 예전 기록에는 없다 */
+  salary?: number
+}
+
 export type HrBook = {
   version: 2
   employees: Employee[]
@@ -115,6 +140,8 @@ export type HrBook = {
   trialSeq: number
   /** 교훈 열쇠(도구|문구) → 교육 효과 측정. 교훈 목록이 밀려나도 남도록 따로 둔다 */
   trials: Record<string, TrialStats>
+  /** 끝낸 일 기록(최근 것부터) */
+  log: JobRecord[]
 }
 
 declare module 'claude-code' {

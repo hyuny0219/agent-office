@@ -2,7 +2,9 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { Dept, HrBook, OfficeActivity, OfficeAgent, Streak, TrialTicket } from '../types'
-import { assign, briefOf, CHECK_PENALTY, DEPT_INFO, DEPTS, deptOf, emptyBook, gradeOf, handOff, hire, isMuted, leadOf, learn, lessonKey, lessonsFor, migrate, warn, rankOf, review, rework, REWORK_PENALTY, salaryOf, tipOf } from './hr'
+import { assign, briefOf, CHECK_PENALTY, DEPT_INFO, DEPTS, deptOf, emptyBook, gradeOf, handOff, hire, isMuted, leadOf, learn, lessonKey, lessonsFor, migrate, warn, rankOf, record, review, rework, REWORK_PENALTY, salaryOf, tipOf } from './hr'
+import { cardOf, findEmployee, reportOf } from './report'
+import type { Period } from './report'
 import { CONTROL_EVERY, effectText, enroll, errorLessonKey, markHit, settle } from './trial'
 import { callKeyOf, ERROR_STREAK, errorKeyOf, errorToast, isAlarm, isOvertime, isPolling, nudgeOf, REPEAT_STREAK, repeatToast, stepOf } from './watch'
 import { activityOf, encodeCells, isMeeting, koNick, layoutOf, nickFor, Office, seated, shortType } from './scene'
@@ -146,11 +148,15 @@ async function appraise($: EngineInterface, a: OfficeAgent, isDone: boolean, isK
   if (a.id === 'main') return
   // 교육 효과 측정: 이번 업무가 든 쪽과 재발한 실수를 교훈별로 더한다(지금 사본에서 읽는다: 동기화 뒤에 적힌 재발도 들도록)
   // 집계한 업무에서는 실험 기록을 지운다(같은 업무를 두 번 세지 않도록)
+  // 평가에 쓰는 칸도 이 사본에서 읽는다(동기화가 읽은 뒤에 난 오류·검증 실패·근태 알림도 들도록)
   let ticket: TrialTicket | undefined
+  let cur: OfficeAgent = a
   await save($, patch(a.id, x => {
     ticket = x.trial
+    cur = x
     return x.trial === undefined ? x : { ...x, trial: undefined }
   }))
+  const got = cur as OfficeAgent
   const settled = ticket as TrialTicket | undefined
   if (settled !== undefined) {
     const at = await $.clock.now()
@@ -161,16 +167,23 @@ async function appraise($: EngineInterface, a: OfficeAgent, isDone: boolean, isK
   const now = await $.clock.now()
   let result: ReturnType<typeof review> | null = null
   await saveHr($, x => {
-    result = review(x, a.nick, { isDone, isKilled, errors: a.errors ?? 0, tools: a.tools, isCheckFailed: a.isCheckFailed }, now)
+    result = review(x, a.nick, { isDone, isKilled, errors: got.errors ?? 0, tools: got.tools, isCheckFailed: got.isCheckFailed }, now)
     // 끝낸 일의 파일은 남겨 두고, BOSS가 곧 다시 고치면 재작업으로 본다
-    const job = result.book.employees.find(x => x.nick === a.nick)?.jobs ?? 0
-    return isDone ? handOff(result.book, { agentId: a.id, nick: a.nick, files: a.files ?? [], endedAt: now, job }) : result.book
+    const employee = result.book.employees.find(x => x.nick === a.nick)
+    const job = employee?.jobs ?? 0
+    const logged = record(result.book, {
+      nick: a.nick, dept: a.dept ?? deptOf(a.type), job, description: got.description, startedAt: got.startedAt, endedAt: got.endedAt ?? now,
+      outcome: isDone ? 'done' : isKilled ? 'killed' : 'failed', score: result.score, errors: got.errors ?? 0,
+      isCheckFailed: isDone && got.isCheckFailed === true, isReworked: false, alarms: got.alarms ?? 0,
+      ...(employee === undefined ? {} : { salary: salaryOf(result.book, employee) }),
+    })
+    return isDone ? handOff(logged, { agentId: a.id, nick: a.nick, files: got.files ?? [], endedAt: now, job }) : logged
   })
   const r = result as ReturnType<typeof review> | null
   if (r === null) return
   const e = r.book.employees.find(x => x.nick === a.nick)
   const rank = e === undefined ? '' : ` ${rankOf(e.xp).ko}`
-  const why = isDone && a.isCheckFailed === true ? ` · 테스트·빌드 실패한 채 완료 -${CHECK_PENALTY}` : ''
+  const why = isDone && got.isCheckFailed === true ? ` · 테스트·빌드 실패한 채 완료 -${CHECK_PENALTY}` : ''
   $.ui.toast(`${a.nick}${rank} 평가 ${gradeOf(r.score)} (${r.score >= 0 ? '+' : ''}${r.score})${why}${movedText(r)}`)
 }
 
@@ -289,7 +302,7 @@ async function watch($: EngineInterface, id: string, e: { tool: string } & objec
   if (ran.deny !== undefined) return null
   const errKey = ran.isError === true ? errorKeyOf(e.tool, ran.text ?? '', e) : null
   const isPoll = isPolling(e.tool)
-  const got: { err?: Streak; call?: Streak; nick?: string } = {}
+  const got: { kind?: 'error' | 'repeat' | null; s?: Streak; nick?: string } = {}
   // 지금 상태에서 바로 센다: 같은 직원의 도구가 나란히 돌아도 서로의 횟수를 잃지 않도록
   await save($, patch(id, a => {
     // 도구마다 따로 센다. 사이에 다른 도구가 끼거나 실패해도 이어 세고(Edit 실패 → Read → Edit 실패가 흔한 헛손질), 그 도구가 성공하면 끊는다
@@ -297,16 +310,20 @@ async function watch($: EngineInterface, id: string, e: { tool: string } & objec
     if (errKey !== null) errStreaks[e.tool] = stepOf(errStreaks[e.tool], errKey)
     else delete errStreaks[e.tool]
     const callStreak = isPoll ? a.callStreak : stepOf(a.callStreak, callKeyOf(e))
-    got.err = errKey === null ? undefined : errStreaks[e.tool]
-    got.call = isPoll ? undefined : callStreak
+    const err = errKey === null ? undefined : errStreaks[e.tool]
+    const call = isPoll ? undefined : callStreak
+    // 오류 알림은 그 오류가 난 호출에서만. 같은 호출이 같은 오류로 되풀이되면 오류 알림 하나로 친다(제자리걸음은 성공한 호출만)
+    const kind = err !== undefined && isAlarm(err, ERROR_STREAK) ? 'error'
+      : errKey === null && call !== undefined && isAlarm(call, REPEAT_STREAK) ? 'repeat' : null
+    got.kind = kind
+    got.s = kind === 'error' ? err : call
     got.nick = a.nick
-    return { ...a, errStreaks, callStreak }
+    // 이번 일의 근태 알림도 같은 저장에서 센다(곧 끝나 평가돼도 기록에서 빠지지 않도록)
+    return { ...a, errStreaks, callStreak, alarms: (a.alarms ?? 0) + (kind === null ? 0 : 1) }
   }))
-  // 오류 알림은 그 오류가 난 호출에서만. 같은 호출이 같은 오류로 되풀이되면 오류 알림 하나로 친다(제자리걸음은 성공한 호출만)
-  const kind = got.err !== undefined && isAlarm(got.err, ERROR_STREAK) ? 'error'
-    : errKey === null && got.call !== undefined && isAlarm(got.call, REPEAT_STREAK) ? 'repeat' : null
-  if (kind === null || got.nick === undefined) return null
-  const s = (kind === 'error' ? got.err : got.call) as Streak
+  const kind = got.kind ?? null
+  if (kind === null || got.nick === undefined || got.s === undefined) return null
+  const s = got.s
   const nick = got.nick
   $.ui.toast(kind === 'error' ? errorToast(nick, e.tool, s) : repeatToast(nick, e.tool, s))
   await saveHr($, b => warn(b, nick))
@@ -337,7 +354,8 @@ function rosterText(b: HrBook, now: number): string {
     if (b.isTrialing) lines.push(`  효과: 실수 목록을 ${CONTROL_EVERY}건에 한 건은 빼고 보내 재발률을 비교합니다. 근거가 모였는데 붙여도 재발이 줄지 않으면 2주 동안 메모에서 뺐다가 다시 잽니다.`)
   }
   lines.push('', `평가: 완료 +10, 실패 -5(중단 -3), 도구 오류 1개당 -1(최대 -5), 오류 없이 완료 +3, 테스트·빌드 실패한 채 완료 -${CHECK_PENALTY}, 끝낸 뒤 BOSS가 같은 파일을 다시 고치면 재작업 -${REWORK_PENALTY}.`,
-    '직급: 사원 0 · 대리 20 · 과장 60 · 차장 120 · 부장 200(경력, 감점이면 깎여 강등). 평균 평가는 최근 일에 무게를 둡니다.')
+    '직급: 사원 0 · 대리 20 · 과장 60 · 차장 120 · 부장 200(경력, 감점이면 깎여 강등). 평균 평가는 최근 일에 무게를 둡니다.',
+    '한 사람의 인사카드는 /office hr <별칭>, 부서 실적 보고는 /office report [today|week].')
   return lines.join('\n')
 }
 
@@ -349,8 +367,8 @@ export const register: Register = (on, options) => {
     const started = await next(e)
     await $.command.register({
       name: 'office',
-      description: '에이전트 사무실 평면도 보기. hr: 인사 기록(부서·직급·연봉·평가), hr on|off: 업무 지시 인사 메모 켜고 끄기, hr ab on|off: 교육 효과 측정(비교군) 켜고 끄기',
-      argumentHint: '[hr [on|off|ab on|off]]',
+      description: '에이전트 사무실 평면도 보기. report [today|week]: 일간·주간 보고, hr: 인사 기록(부서·직급·연봉·평가), hr <별칭>: 인사카드, hr on|off: 업무 지시 인사 메모 켜고 끄기, hr ab on|off: 교육 효과 측정(비교군) 켜고 끄기',
+      argumentHint: '[report [today|week] | hr [<별칭>|on|off|ab on|off]]',
     })
     $.clock.every(FRAME_MS, () => void tick($).catch(() => undefined))
     return started
@@ -358,6 +376,13 @@ export const register: Register = (on, options) => {
 
   on('command.run', { command: 'office' }, async ($, e) => {
     const [sub, arg, arg2] = e.args.trim().split(/\s+/)
+    if (sub === 'hr' && arg === 'ab' && arg2 !== 'on' && arg2 !== 'off') return { text: '쓰는 법: /office hr ab on|off (교육 효과 측정 켜기·끄기)' }
+    if (sub === 'report') {
+      const want = arg?.toLowerCase()
+      if (want !== undefined && want !== 'today' && want !== 'week') return { text: '쓰는 법: /office report [today|week] (today: 최근 24시간, week: 최근 7일)' }
+      const period: Period = want ?? 'today'
+      return { text: reportOf(await hrOf($), period, await $.clock.now()) }
+    }
     if (sub === 'hr' && arg === 'ab' && (arg2 === 'on' || arg2 === 'off')) {
       await saveHr($, b => ({ ...b, isTrialing: arg2 === 'on' }))
       return { text: arg2 === 'on'
@@ -369,12 +394,17 @@ export const register: Register = (on, options) => {
         await saveHr($, b => ({ ...b, isCoaching: arg === 'on' }))
         return { text: arg === 'on' ? '업무 지시에 인사 메모(담당·지난 기록·부서가 반복한 실수·평가 기준)를 붙입니다.' : '업무 지시에 인사 메모를 붙이지 않습니다. 평가·연봉은 계속 기록합니다.' }
       }
-      return { text: rosterText(await hrOf($), await $.clock.now()) }
+      const b = await hrOf($)
+      if (arg !== undefined && arg !== '') {
+        const who = findEmployee(b, arg)
+        return { text: who === undefined ? `${arg}라는 직원이 없습니다. /office hr로 명부를 보세요.` : cardOf(b, who, await $.clock.now()) }
+      }
+      return { text: rosterText(b, await $.clock.now()) }
     }
     await ensure($, 'main')
     const opened = await $.ui.open({ id: PANE, title: '에이전트 사무실' })
     const lab = isAttached ? ` 설정한 패널(${attachTo}) 아래에도 붙어 있습니다.` : ''
-    return { text: `${opened.isPlaced ? '에이전트 사무실을 열었습니다.' : '에이전트 사무실이 아직 그려지지 않았습니다(창이 좁으면 넓혀 주세요).'}${lab} 인사 기록은 /office hr.` }
+    return { text: `${opened.isPlaced ? '에이전트 사무실을 열었습니다.' : '에이전트 사무실이 아직 그려지지 않았습니다(창이 좁으면 넓혀 주세요).'}${lab} 인사 기록은 /office hr, 보고서는 /office report.` }
   })
 
   // 새 에이전트: 부서 직원에게 맡기고(업무 지시 끝에 인사 메모), 띄운 쪽과 회의실에서 지시를 주고받은 뒤 일하러 간다

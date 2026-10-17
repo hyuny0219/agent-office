@@ -37,6 +37,8 @@ In the desktop app, where `/plugin` does not run: click + next to the prompt box
 | --- | --- |
 | `/office` | Open the office floor plan pane |
 | `/office hr` | HR records: staff, rank, salary, latest review, done/failed, tool errors, reworks and attendance alerts by department, plus each department's repeated mistakes |
+| `/office hr <nick>` | One employee's personnel card: rank and experience to the next rank, salary breakdown, record, last 5 jobs, the department's repeated mistakes (`bear` or the Korean name both work) |
+| `/office report [today\|week]` | Daily (last 24 hours, the default) or weekly (last 7 days) report: totals and per-department results, hours worked and labor cost, MVP, and jobs to look at (failed, finished with failing tests, reworked, attendance alerts) |
 | `/office hr on` / `off` | Turn the HR memo in task briefs and the attendance notices on or off (on by default) |
 | `/office hr ab on` / `off` | Turn training-effect measurement (a control group that gets no mistake list) on or off (on by default) |
 
@@ -92,6 +94,10 @@ Review criteria: finish the task, keep tool errors down, don't finish with a fai
 The repeated mistakes are subagents' tool error messages, grouped and counted by department (paths and numbers removed). Only those seen at least twice are added, most recent first, three at most. Mistakes not seen again for two weeks are left out.
 Turn it off with `/office hr off`. Reviews and salaries keep being recorded either way.
 
+
+### Reports
+
+`/office report` is built from the log of finished jobs (the latest 300). The mod doesn't know your time zone, so "today" means the last 24 hours and "week" the last 7 days. Labor cost is a playful number: each employee's current salary turned into an hourly rate (40 hours × 52 weeks) times the time the job took.
 
 ### Measuring the training effect
 

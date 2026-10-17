@@ -1,7 +1,7 @@
 // 인사 제도. 에이전트 종류로 부서를 정하고, 같은 부서 직원(별칭)이 일을 맡을 때마다 경력이 쌓인다.
 // 평가는 실제 기록(완료·실패·도구 오류·거절)으로만 매기고, 부서가 반복한 실수는 "교훈"으로 모아
 // 다음에 그 부서 직원이 일을 맡을 때 업무 지시 끝에 짧은 인사 메모로 붙인다. 순수 함수만 둔다.
-import type { Dept, Employee, Handoff, HrBook, Lesson } from '../types'
+import type { Dept, Employee, Handoff, HrBook, JobRecord, Lesson } from '../types'
 
 export const DEPTS: Dept[] = ['dev', 'research', 'qa', 'plan', 'docs', 'ops']
 
@@ -45,12 +45,14 @@ export const warn = (book: HrBook, nick: string): HrBook =>
 export const leadOf = (book: HrBook, dept: Dept): Employee | undefined =>
   book.employees.filter(e => e.dept === dept && e.jobs > 0).sort((a, b) => b.xp - a.xp || a.hiredAt - b.hiredAt)[0]
 
+/** 성과급(만원): 최근 평가 평균 × 60 */
+export const bonusOf = (e: Employee): number => Math.max(0, Math.round((e.avgScore ?? 0) * 60))
+/** 팀장 수당(만원) */
+export const LEAD_ALLOWANCE = 600
+
 /** 연봉(만원): 직급 기본급 + 최근 평가 성과급 + 팀장 수당 */
-export const salaryOf = (book: HrBook, e: Employee): number => {
-  const bonus = Math.max(0, Math.round((e.avgScore ?? 0) * 60))
-  const lead = leadOf(book, e.dept)?.nick === e.nick ? 600 : 0
-  return rankOf(e.xp).salary + bonus + lead
-}
+export const salaryOf = (book: HrBook, e: Employee): number =>
+  rankOf(e.xp).salary + bonusOf(e) + (leadOf(book, e.dept)?.nick === e.nick ? LEAD_ALLOWANCE : 0)
 
 export type JobResult = {
   isDone: boolean
@@ -78,7 +80,7 @@ export const scoreOf = (r: JobResult): number => {
 
 export const gradeOf = (score: number): string => (score >= 13 ? 'S' : score >= 10 ? 'A' : score >= 6 ? 'B' : score >= 0 ? 'C' : 'D')
 
-export const emptyBook = (): HrBook => ({ version: 2, employees: [], lessons: {}, handoffs: [], isCoaching: true, isTrialing: true, trialSeq: 0, trials: {} })
+export const emptyBook = (): HrBook => ({ version: 2, employees: [], lessons: {}, handoffs: [], isCoaching: true, isTrialing: true, trialSeq: 0, trials: {}, log: [] })
 
 /**
  * 저장된 인사 기록을 지금 형식으로 옮긴다. 예전 판(version 1)이나 모르는 판이라도 직원 명부가 있으면
@@ -120,8 +122,18 @@ export function migrate(stored: unknown): HrBook | null {
     const at = numOrNull(s.ineffectiveAt)
     trials[k] = { memo: arm(s.memo), control: arm(s.control), lastAt: num(s.lastAt, 0), ...(at === null ? {} : { ineffectiveAt: at }) }
   }
+  const isNum = (x: unknown): x is number => typeof x === 'number' && Number.isFinite(x)
+  const log = (Array.isArray(v.log) ? v.log : []).filter((x): x is JobRecord =>
+    typeof x?.nick === 'string' && isNum(x.job) && isNum(x.startedAt) && isNum(x.endedAt) && isNum(x.score)
+    && (x.outcome === 'done' || x.outcome === 'failed' || x.outcome === 'killed'))
+    .map(x => {
+      const { salary, ...rest } = x
+      return { ...rest, dept: isDept(x.dept) ? x.dept : 'ops', description: typeof x.description === 'string' ? x.description : '', errors: num(x.errors, 0),
+        isCheckFailed: x.isCheckFailed === true, isReworked: x.isReworked === true, alarms: num(x.alarms, 0), ...(isNum(salary) ? { salary } : {}) }
+    })
+    .slice(0, MAX_LOG)
   return {
-    ...v, version: 2, employees, lessons, handoffs, trials,
+    ...v, version: 2, employees, lessons, handoffs, trials, log,
     isCoaching: v.isCoaching !== false, isTrialing: v.isTrialing !== false, trialSeq: num(v.trialSeq, 0),
   }
 }
@@ -158,6 +170,12 @@ export function review(book: HrBook, nick: string, r: JobResult, now: number): M
   return { ...moved, score }
 }
 
+/** 끝낸 일 기록은 최근 것 300건까지 */
+export const MAX_LOG = 300
+
+/** 끝낸 일 한 건을 기록한다(보고서·인사카드가 읽는다) */
+export const record = (book: HrBook, r: JobRecord): HrBook => ({ ...book, log: [r, ...book.log].slice(0, MAX_LOG) })
+
 // ── 재작업: 끝낸 일의 파일을 BOSS가 곧 다시 고치면 그 직원의 평가를 깎는다 ─────
 
 /** 끝낸 뒤 이 시간 안에 BOSS가 같은 파일을 고치면 재작업 */
@@ -189,7 +207,9 @@ export function rework(book: HrBook, file: string, now: number): Moved & { nick:
       avgScore: e.avgScore === null ? null : e.avgScore - REWORK_PENALTY * EWMA * (1 - EWMA) ** later,
     }
   })
-  return { ...moved, nick: hit.nick }
+  // 그 일의 기록에도 재작업을 적는다
+  const log = moved.book.log.map(r => (r.nick === hit.nick && r.job === hit.job ? { ...r, isReworked: true, score: r.score - REWORK_PENALTY } : r))
+  return { ...moved, book: { ...moved.book, log }, nick: hit.nick }
 }
 
 /**
