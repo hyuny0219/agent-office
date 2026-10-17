@@ -81,3 +81,7 @@ claude plugin validate .
 claude plugin test .
 claude --plugin-dir .
 ```
+
+## 라이선스
+
+[MIT](LICENSE)
