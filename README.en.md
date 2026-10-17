@@ -36,8 +36,8 @@ In the desktop app, where `/plugin` does not run: click + next to the prompt box
 | Command | What it does |
 | --- | --- |
 | `/office` | Open the office floor plan pane |
-| `/office hr` | HR records: staff, rank, salary, latest review, done/failed, tool errors and reworks by department, plus each department's repeated mistakes |
-| `/office hr on` / `off` | Turn the HR memo in task briefs on or off (on by default) |
+| `/office hr` | HR records: staff, rank, salary, latest review, done/failed, tool errors, reworks and attendance alerts by department, plus each department's repeated mistakes |
+| `/office hr on` / `off` | Turn the HR memo in task briefs and the attendance notices on or off (on by default) |
 
 The floor plan is drawn in pixels in the terminal (72 to 140 columns wide, 27 rows tall). The desktop app and VS Code show the list only.
 
@@ -62,6 +62,16 @@ The floor plan is drawn in pixels in the terminal (72 to 140 columns wide, 27 ro
   - The average review leans on recent work (the latest job weighs 30%).
 - **Ranks** follow experience points: 사원 (staff) → 대리 (assistant manager, 20) → 과장 (manager, 60) → 차장 (deputy general manager, 120) → 부장 (general manager, 200). Penalties take experience away too, so employees can be demoted. The most experienced member of a department is its team lead.
 - **Salary**: base pay by rank + a bonus from the average review + a team-lead allowance.
+
+### Attendance
+
+The office watches for warning signs, shows a toast and counts each attendance alert in the HR records (no points are taken off).
+
+- **Repeating a mistake**: the same tool fails with the same error (ignoring paths and numbers) 3 times in a row. Each tool is counted separately, so other tools in between don't break the streak; a success of that tool does. Bash failures are told apart by command name (a `grep` with no match is not the same mistake as a failing `npm test`), and user or permission denials are not counted.
+- **Running in place**: the same tool is called with the same input 4 times in a row (tools that poll for status, such as `TaskGet` or `Monitor`, are excluded).
+- **Overtime**: one job held for more than 20 minutes is announced once and marked `overtime` in the list.
+
+With `/office hr on`, repeating a mistake or running in place also adds **a short notice the employee reads after the tool result**: stop repeating the same approach, find another way, or report what's blocking and finish.
 
 ### The HR memo in task briefs
 

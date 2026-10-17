@@ -33,7 +33,16 @@ export type OfficeAgent = {
   files?: string[]
   /** 마지막 Bash(테스트·빌드)가 실패했는지. 실패한 채 끝내면 감점 */
   isCheckFailed?: boolean
+  /** 도구별로 연달아 난 같은 오류(헛손질) */
+  errStreaks?: Record<string, Streak>
+  /** 연달아 부른 같은 도구·같은 입력(제자리걸음) */
+  callStreak?: Streak
+  /** 야근을 이미 알렸는지 */
+  isOvertimeNoticed?: boolean
 }
+
+/** 같은 것이 연달아 몇 번 났는지 */
+export type Streak = { key: string; count: number }
 
 export type Dept = 'dev' | 'research' | 'qa' | 'plan' | 'docs' | 'ops'
 
@@ -50,6 +59,8 @@ export type Employee = {
   toolErrors: number
   /** 끝낸 뒤 BOSS가 같은 파일을 다시 고친 횟수 */
   reworks: number
+  /** 근태 알림(같은 실수 연발·제자리걸음)을 받은 횟수 */
+  alarms: number
   /** 최근 평가 가중 평균(최근 일이 30%) */
   avgScore: number | null
   lastScore: number | null

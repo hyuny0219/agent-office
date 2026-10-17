@@ -2,6 +2,7 @@ import { expect, test } from 'claude-code/testing'
 
 import type { HrBook, OfficeAgent } from '../types'
 import { briefOf, deptOf, emptyBook, gradeOf, handOff, hire, leadOf, learn, LESSON_TTL_MS, migrate, patternOf, rankOf, review, rework, REWORK_MS, salaryOf, scoreOf, tipOf } from './hr'
+import { callKeyOf, errorKeyOf, isAlarm, isOvertime, isPolling, nudgeOf, OVERTIME_MS, stepOf } from './watch'
 import { activityOf, encodeCells, koNick, layoutOf, nickFor, Office, PLAN_ROWS } from './scene'
 
 const agent = (id: string, over: Partial<OfficeAgent> = {}): OfficeAgent => ({
@@ -149,6 +150,32 @@ test('예전 판(version 1) 인사 기록을 비우지 않고 지금 형식으�
   expect((odd as unknown as { future: number }).future).toBe(1)
   expect(migrate(undefined)).toBeNull()
   expect(migrate({ version: 1 })).toBeNull()
+})
+
+test('근태: 같은 것을 연달아 세고, 문턱과 그 배수마다 알리며, 호출 열쇠는 겉봉 칸을 빼고 입력만 본다', () => {
+  let s = stepOf(undefined, 'a')
+  s = stepOf(s, 'a')
+  expect(isAlarm(s, 3)).toBe(false)
+  s = stepOf(s, 'a')
+  expect(isAlarm(s, 3)).toBe(true)
+  expect(isAlarm(stepOf(s, 'a'), 3)).toBe(false)
+  expect(stepOf(s, 'b')).toEqual({ key: 'b', count: 1 })
+  expect(callKeyOf({ tool: 'Read', file_path: '/a', agentId: 'x', tool_use_id: '1' })).toBe(callKeyOf({ tool: 'Read', agentId: 'y', tool_use_id: '2', file_path: '/a' }))
+  expect(callKeyOf({ tool: 'Read', file_path: '/a' })).not.toBe(callKeyOf({ tool: 'Read', file_path: '/b' }))
+  // 경로·숫자만 다른 오류는 같은 실수
+  expect(errorKeyOf('Read', 'ENOENT: no such file /a/b line 3')).toBe(errorKeyOf('Read', 'ENOENT: no such file /c line 9'))
+  // Bash는 "Exit code N" 줄을 건너뛰고 명령 이름으로 가른다
+  expect(errorKeyOf('Bash', 'Exit code 1\nFAIL src/a.test.ts', { command: 'npm test' })).toBe('Bash|npm: FAIL src<경로>')
+  expect(errorKeyOf('Bash', 'Exit code 1', { command: 'grep foo .' })).not.toBe(errorKeyOf('Bash', 'Exit code 1', { command: 'CI=1 npm test' }))
+  expect(errorKeyOf('Bash', 'Exit code 1', { command: 'CI=1 npm test' })).toBe('Bash|npm: ')
+  const nudge = nudgeOf('error', 'Edit', { key: errorKeyOf('Edit', 'String to replace not found in file.'), count: 3 })
+  expect(nudge).toContain('같은 오류가 3번 연달아')
+  expect(nudge).toContain('Read로 다시 읽어')
+  expect(nudge).toContain('보고하고 끝내세요')
+  expect(isPolling('TaskGet')).toBe(true)
+  expect(isPolling('Grep')).toBe(false)
+  expect(isOvertime(0, null, OVERTIME_MS)).toBe(true)
+  expect(isOvertime(0, 5, OVERTIME_MS)).toBe(false)
 })
 
 test('평면도: 방 표지, 부서 섬 표지와 명패, 셀 인코딩', () => {
@@ -307,6 +334,111 @@ test('테스트가 실패한 채 끝내면 깎이고, 끝낸 파일을 BOSS가 �
   expect(toasts.join()).toContain('BOSS가 BEAR의 작업(a.ts)을 다시 고쳤습니다 · 재작업 -4')
   const roster = JSON.stringify(await $.command.run({ command: 'office', args: 'hr', ...RUN }))
   expect(roster).toContain('재작업 1')
+})
+
+test('같은 실수를 연달아 하면 알리고 그 직원에게 근태 알림을 붙이며, 제자리걸음·야근도 알린다', async ($, on) => {
+  const store = new Map<string, unknown>()
+  on('store.get', (_$, e) => ({ value: store.get(e.key) }))
+  on('store.set', (_$, e) => {
+    store.set(e.key, e.value)
+    return { value: undefined }
+  })
+  let clock = 1000
+  on('clock.now', () => ({ value: clock }))
+  on('agent.spawn', () => ({ model: 'm', agentId: 'c1' }))
+  on('agent.list', () => ({ value: [{ id: 'c1', description: '고치기', type: 'builder', status: 'running' }] }))
+  const toasts: string[] = []
+  on('ui.toast', (_$, e) => {
+    toasts.push(JSON.stringify(e))
+    return { value: undefined }
+  })
+  on('tool.call', (_$, e) => (e.tool === 'Edit' ? { result: 'x', isError: true, text: 'String to replace not found in file.' } : { result: 'ok' }))
+  on('turn.complete', () => ({ text: '' }))
+  await $.agent.spawn({ tool_use_id: 't4', prompt: '고쳐', description: '고치기', subagentType: 'builder', ...SPAWN })
+
+  const edit = { tool: 'Edit', file_path: '/r/a.ts', old_string: 'a', new_string: 'b', agentId: 'c1' } as const
+  const first = await $.tool.call(edit)
+  expect(first.context ?? []).toHaveLength(0)
+  await $.tool.call({ tool: 'Read', file_path: '/r/a.ts', agentId: 'c1' })
+  await $.tool.call({ ...edit, old_string: 'c' })
+  const third = await $.tool.call({ ...edit, old_string: 'd' })
+  expect(toasts.join()).toContain('BEAR가 같은 실수를 3번 연달아 하고 있습니다: Edit')
+  expect((third.context ?? []).join()).toContain('[사내 근태 알림 · agent-office] 같은 오류가 3번 연달아')
+
+  // 같은 입력의 Grep을 네 번: 제자리걸음
+  for (let i = 0; i < 3; i++) await $.tool.call({ tool: 'Grep', pattern: 'foo', agentId: 'c1' })
+  const fourth = await $.tool.call({ tool: 'Grep', pattern: 'foo', agentId: 'c1' })
+  expect(toasts.join()).toContain('같은 Grep를 같은 입력으로 4번')
+  expect((fourth.context ?? []).join()).toContain('결과는 바뀌지 않습니다')
+
+  // 코칭을 끄면 토스트만 남기고 직원에게는 붙이지 않는다
+  await $.command.run({ command: 'office', args: 'hr off', ...RUN })
+  for (let i = 0; i < 3; i++) await $.tool.call({ tool: 'Grep', pattern: 'bar', agentId: 'c1' })
+  const quiet = await $.tool.call({ tool: 'Grep', pattern: 'bar', agentId: 'c1' })
+  expect(quiet.context ?? []).toHaveLength(0)
+  expect(JSON.stringify(await $.command.run({ command: 'office', args: 'hr', ...RUN }))).toContain('근태 알림 3')
+
+  clock += OVERTIME_MS
+  await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 'z', agentId: 'c1', reason: 'answer' })
+  await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 'z2', agentId: 'c1', reason: 'answer' })
+  expect(toasts.filter(t => t.includes('20분째 야근 중')).length).toBe(1)
+})
+
+test('근태 경계: 폴링은 알림을 다시 울리지 않고, 거절은 세지 않으며, 나란히 난 오류도 정확히 한 번 알리고, 끝난 사람은 야근이 아니다', async ($, on) => {
+  const store = new Map<string, unknown>()
+  on('store.get', (_$, e) => ({ value: store.get(e.key) }))
+  on('store.set', (_$, e) => {
+    store.set(e.key, e.value)
+    return { value: undefined }
+  })
+  let clock = 1000
+  on('clock.now', () => ({ value: clock }))
+  let n = 0
+  on('agent.spawn', () => ({ model: 'm', agentId: `d${++n}` }))
+  const status: Record<string, 'running' | 'completed'> = { d1: 'running', d2: 'running' }
+  on('agent.list', () => ({ value: Object.entries(status).map(([id, s]) => ({ id, description: id, type: 'builder', status: s })) }))
+  const toasts: string[] = []
+  on('ui.toast', (_$, e) => {
+    toasts.push(JSON.stringify(e))
+    return { value: undefined }
+  })
+  on('tool.call', async (_$, e) => {
+    await Promise.resolve()
+    if (e.tool === 'Write') return { deny: '사용자가 거절함' }
+    return e.tool === 'Edit' ? { result: 'x', isError: true, text: 'String to replace not found in file.' } : { result: 'ok' }
+  })
+  on('turn.complete', () => ({ text: '' }))
+  await $.agent.spawn({ tool_use_id: 't5', prompt: 'a', description: 'd1', subagentType: 'builder', ...SPAWN })
+  await $.agent.spawn({ tool_use_id: 't6', prompt: 'b', description: 'd2', subagentType: 'builder', ...SPAWN })
+  const count = (s: string) => toasts.filter(t => t.includes(s)).length
+
+  // 거절 세 번: 실수가 아니다
+  for (let i = 0; i < 3; i++) await $.tool.call({ tool: 'Write', file_path: `/r/${i}.ts`, content: '', agentId: 'd1' })
+  expect(count('같은 실수')).toBe(0)
+
+  // 나란히 실패한 Edit 셋: 알림은 정확히 한 번
+  await Promise.all([1, 2, 3].map(i => $.tool.call({ tool: 'Edit', file_path: '/r/a.ts', old_string: `${i}`, new_string: 'b', agentId: 'd1' })))
+  expect(count('같은 실수를 3번')).toBe(1)
+
+  // 같은 입력으로 되풀이해 실패하는 Edit: 오류 알림만, 제자리걸음은 겹쳐 울리지 않는다
+  const same = { tool: 'Edit', file_path: '/r/s.ts', old_string: 'z', new_string: 'b', agentId: 'd2' } as const
+  for (let i = 0; i < 4; i++) await $.tool.call(same)
+  expect(count('같은 Edit를')).toBe(0)
+  expect(count('같은 실수를 3번')).toBe(2)
+
+  // Grep 네 번 뒤 폴링: 제자리걸음 알림은 한 번뿐
+  for (let i = 0; i < 4; i++) await $.tool.call({ tool: 'Grep', pattern: 'q', agentId: 'd1' })
+  for (let i = 0; i < 2; i++) await $.tool.call({ tool: 'TaskGet', taskId: '1', agentId: 'd1' })
+  expect(count('제자리걸음')).toBe(1)
+
+  // d2가 끝나는 바로 그 동기화에 20분이 지났다: d1만 야근, d2는 아니다. 다시 동기화해도 한 번뿐
+  clock += 20 * 60_000
+  status.d2 = 'completed'
+  await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 'w', agentId: 'd2', reason: 'answer' })
+  await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 'w2', agentId: 'd1', reason: 'answer' })
+  expect(count('야근 중')).toBe(1)
+  expect(count('야근 중입니다: d1')).toBe(1)
+  expect(count('야근 중입니다: d2')).toBe(0)
 })
 
 test('/office hr off면 업무 지시를 건드리지 않고, 평가·명부는 계속 남긴다', async ($, on) => {

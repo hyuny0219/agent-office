@@ -1,8 +1,9 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Dept, HrBook, OfficeActivity, OfficeAgent } from '../types'
-import { assign, briefOf, CHECK_PENALTY, DEPT_INFO, DEPTS, deptOf, emptyBook, gradeOf, handOff, hire, leadOf, learn, migrate, rankOf, review, rework, REWORK_PENALTY, salaryOf, tipOf } from './hr'
+import type { Dept, HrBook, OfficeActivity, OfficeAgent, Streak } from '../types'
+import { assign, briefOf, CHECK_PENALTY, DEPT_INFO, DEPTS, deptOf, emptyBook, gradeOf, handOff, hire, leadOf, learn, migrate, warn, rankOf, review, rework, REWORK_PENALTY, salaryOf, tipOf } from './hr'
+import { callKeyOf, ERROR_STREAK, errorKeyOf, errorToast, isAlarm, isOvertime, isPolling, nudgeOf, REPEAT_STREAK, repeatToast, stepOf } from './watch'
 import { activityOf, encodeCells, isMeeting, koNick, layoutOf, nickFor, Office, seated, shortType } from './scene'
 import type { Layout, Leads } from './scene'
 
@@ -45,6 +46,8 @@ const fileOf = (e: object): string | null => {
   return typeof f === 'string' && f !== '' ? f : null
 }
 const baseName = (f: string): string => f.split('/').pop() ?? f
+/** 도구별 같은 실수 연속 횟수 중 가장 큰 것 */
+const streakMax = (a: OfficeAgent): number => Math.max(0, ...Object.values(a.errStreaks ?? {}).map(s => s.count))
 /** 테스트·빌드·타입 검사로 보이는 Bash 명령 */
 const CHECK_RE = /\b(test|tests|build|tsc|jest|vitest|pytest|mocha|lint|typecheck|check|cargo|go\s+(test|build|vet)|make|gradle|mvn|ruff|mypy|eslint)\b/
 const isCheckCommand = (e: object): boolean => {
@@ -182,31 +185,48 @@ async function syncStatus($: EngineInterface) {
   const known = await agentsOf($)
   const reports: [string, string][] = []
   const finished: { a: OfficeAgent; isDone: boolean; isKilled: boolean }[] = []
-  let changed = false
-  const next = known.map(a => {
+  // 바뀐 칸만 모은다: 기다리는 사이 다른 훅이 고친 칸(연속 횟수 등)을 덮지 않도록
+  const updates = new Map<string, Pick<OfficeAgent, 'activity' | 'name' | 'parentId' | 'endedAt'>>()
+  for (const a of known) {
     const info = infos.find(i => i.id === a.id)
-    if (info === undefined) return a
+    if (info === undefined) continue
     const ended = info.status === 'completed' || info.status === 'failed' || info.status === 'killed'
     const activity: OfficeActivity = info.status === 'completed' ? 'done' : ended ? 'failed'
       : info.status === 'idle' || info.status === 'waiting' ? 'idle'
       : a.activity === 'done' || a.activity === 'failed' || a.activity === 'idle' ? 'think' : a.activity
     const name = info.name ?? a.name ?? null
-    if (activity === a.activity && ended === (a.endedAt !== null) && name === (a.name ?? null)) return a
-    changed = true
+    if (activity === a.activity && ended === (a.endedAt !== null) && name === (a.name ?? null)) continue
     if (ended && a.endedAt === null) finished.push({ a, isDone: info.status === 'completed', isKilled: info.status === 'killed' })
     if (activity === 'done' && a.activity !== 'done') reports.push([a.id, a.parentId ?? 'main'])
-    return { ...a, activity, name, parentId: a.parentId ?? info.parentId ?? 'main', endedAt: ended ? a.endedAt ?? now : null }
-  })
+    updates.set(a.id, { activity, name, parentId: a.parentId ?? info.parentId ?? 'main', endedAt: ended ? a.endedAt ?? now : null })
+  }
   // 이 mod가 불러와지기 전에 뜬 에이전트도 들인다
   const newcomers = infos.filter(i => !known.some(a => a.id === i.id) && (i.status === 'running' || i.status === 'pending'))
-  if (!changed && newcomers.length === 0) return
-  await save($, () => {
-    let list = next
-    for (const pair of reports) list = meet(pair, now + MEET_MS)(list)
-    return list
-  })
-  for (const i of newcomers) await admit($, { ...fresh(i.id, i.type, i.description, now), name: i.name ?? null, parentId: i.parentId ?? 'main' })
-  for (const f of finished) await appraise($, f.a, f.isDone, f.isKilled)
+  if (updates.size > 0 || newcomers.length > 0) {
+    await save($, current => {
+      let list = current.map(a => {
+        const u = updates.get(a.id)
+        return u === undefined ? a : { ...a, ...u }
+      })
+      for (const pair of reports) list = meet(pair, now + MEET_MS)(list)
+      return list
+    })
+    for (const i of newcomers) await admit($, { ...fresh(i.id, i.type, i.description, now), name: i.name ?? null, parentId: i.parentId ?? 'main' })
+    for (const f of finished) await appraise($, f.a, f.isDone, f.isKilled)
+  }
+  // 상태를 옮긴 뒤에 본다(방금 끝난 사람을 야근이라 하지 않도록)
+  const working = new Set(infos.filter(i => i.status === 'running' || i.status === 'pending').map(i => i.id))
+  await checkOvertime($, working)
+}
+
+/** 오래 일하는 직원을 한 번씩 알린다(엔진이 지금 일하는 중이라고 하는 사람만, 대기 중은 빼고) */
+async function checkOvertime($: EngineInterface, working: ReadonlySet<string>) {
+  const now = await $.clock.now()
+  const late = (await agentsOf($)).filter(a => a.id !== 'main' && working.has(a.id) && a.activity !== 'idle'
+    && a.isOvertimeNoticed !== true && isOvertime(a.startedAt, a.endedAt, now))
+  if (late.length === 0) return
+  await save($, list => list.map(a => (late.some(l => l.id === a.id) ? { ...a, isOvertimeNoticed: true } : a)))
+  for (const a of late) $.ui.toast(`${a.nick}가 ${Math.floor((now - a.startedAt) / 60_000)}분째 야근 중입니다: ${a.description || shortType(a.type)}`)
 }
 
 async function tick($: EngineInterface) {
@@ -238,6 +258,39 @@ function officeAt(requestId: string, layout: Layout): Office {
   return office
 }
 
+/**
+ * 근태: 같은 오류를 연달아 내거나 같은 호출을 되풀이하면 사용자에게 알리고 기록한다.
+ * 코칭이 켜져 있으면 그 직원에게 붙일 알림을 돌려준다.
+ */
+async function watch($: EngineInterface, id: string, e: { tool: string } & object, ran: { deny?: string; text?: string; isError?: boolean }): Promise<string | null> {
+  // 거절은 그 직원의 실수가 아니다(같은 거절 문구가 되풀이돼도 세지 않는다)
+  if (ran.deny !== undefined) return null
+  const errKey = ran.isError === true ? errorKeyOf(e.tool, ran.text ?? '', e) : null
+  const isPoll = isPolling(e.tool)
+  const got: { err?: Streak; call?: Streak; nick?: string } = {}
+  // 지금 상태에서 바로 센다: 같은 직원의 도구가 나란히 돌아도 서로의 횟수를 잃지 않도록
+  await save($, patch(id, a => {
+    // 도구마다 따로 센다. 사이에 다른 도구가 끼거나 실패해도 이어 세고(Edit 실패 → Read → Edit 실패가 흔한 헛손질), 그 도구가 성공하면 끊는다
+    const errStreaks = { ...(a.errStreaks ?? {}) }
+    if (errKey !== null) errStreaks[e.tool] = stepOf(errStreaks[e.tool], errKey)
+    else delete errStreaks[e.tool]
+    const callStreak = isPoll ? a.callStreak : stepOf(a.callStreak, callKeyOf(e))
+    got.err = errKey === null ? undefined : errStreaks[e.tool]
+    got.call = isPoll ? undefined : callStreak
+    got.nick = a.nick
+    return { ...a, errStreaks, callStreak }
+  }))
+  // 오류 알림은 그 오류가 난 호출에서만. 같은 호출이 같은 오류로 되풀이되면 오류 알림 하나로 친다(제자리걸음은 성공한 호출만)
+  const kind = got.err !== undefined && isAlarm(got.err, ERROR_STREAK) ? 'error'
+    : errKey === null && got.call !== undefined && isAlarm(got.call, REPEAT_STREAK) ? 'repeat' : null
+  if (kind === null || got.nick === undefined) return null
+  const s = (kind === 'error' ? got.err : got.call) as Streak
+  const nick = got.nick
+  $.ui.toast(kind === 'error' ? errorToast(nick, e.tool, s) : repeatToast(nick, e.tool, s))
+  await saveHr($, b => warn(b, nick))
+  return (await hrOf($)).isCoaching ? nudgeOf(kind, e.tool, s) : null
+}
+
 /** /office hr: 부서별 직원·직급·연봉·평가, 부서가 반복한 실수 */
 function rosterText(b: HrBook): string {
   const won = (n: number) => n.toLocaleString('en-US')
@@ -250,7 +303,7 @@ function rosterText(b: HrBook): string {
     lines.push('', `${DEPT_INFO[d].ko}${lead === undefined ? '' : ` — 팀장 ${lead.nick}(${koNick(lead.nick)})`}`)
     for (const e of staffList) {
       const grade = e.lastScore === null ? '-' : gradeOf(e.lastScore)
-      lines.push(`  ${e.nick} ${koNick(e.nick)} · ${rankOf(e.xp).ko} · 연봉 ${won(salaryOf(b, e))}만원 · 최근 평가 ${grade} · 완료 ${e.done} / 실패 ${e.failed} · 도구 오류 ${e.toolErrors}${e.reworks > 0 ? ` · 재작업 ${e.reworks}` : ''} · 경력 ${e.xp}`)
+      lines.push(`  ${e.nick} ${koNick(e.nick)} · ${rankOf(e.xp).ko} · 연봉 ${won(salaryOf(b, e))}만원 · 최근 평가 ${grade} · 완료 ${e.done} / 실패 ${e.failed} · 도구 오류 ${e.toolErrors}${e.reworks > 0 ? ` · 재작업 ${e.reworks}` : ''}${e.alarms > 0 ? ` · 근태 알림 ${e.alarms}` : ''} · 경력 ${e.xp}`)
     }
   }
   const lessonLines = DEPTS.flatMap(d => (b.lessons[d] ?? []).slice(0, 3).map(l => {
@@ -334,9 +387,10 @@ export const register: Register = (on, options) => {
       if (target !== undefined) await save($, meet([id, target.id], (await $.clock.now()) + MEET_MS))
     }
     let ran: Awaited<ReturnType<typeof next>> | undefined
+    /** 그 직원이 도구 결과 뒤에 읽을 근태 알림 */
+    let nudge: string | null = null
     try {
       ran = await next(e)
-      return ran
     } finally {
       const left = [...(inflight.get(id) ?? [])]
       left.splice(left.indexOf(e.tool), 1)
@@ -361,7 +415,12 @@ export const register: Register = (on, options) => {
         const at = await $.clock.now()
         await saveHr($, b => learn(b, dept, e.tool, text, at))
       }
+      if (ran !== undefined && id !== 'main') nudge = await watch($, id, e, ran)
     }
+    // 여기 오면 next가 답했다(던졌으면 finally 뒤로 나간다)
+    const out = ran as NonNullable<typeof ran>
+    if (nudge === null || out.deny !== undefined) return out
+    return { ...out, context: [...(out.context ?? []), nudge] }
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
@@ -381,7 +440,12 @@ export const register: Register = (on, options) => {
         : STATUS_WORD[a.activity]
       const mins = Math.floor(((a.endedAt ?? now) - a.startedAt) / 60_000)
       const errs = a.errors ? ` · 오류 ${a.errors}` : ''
-      return { key: `row-${a.id}`, text: `${a.nick} ${who} · ${where} · 도구 ${a.tools}회${errs} · ${mins}분 · ${a.description || '-'}`, isOff: a.endedAt !== null, isBad: a.activity === 'failed' }
+      const signs = [
+        streakMax(a) >= ERROR_STREAK ? `같은 실수 ${streakMax(a)}연속` : null,
+        (a.callStreak?.count ?? 0) >= REPEAT_STREAK ? '제자리걸음' : null,
+        isOvertime(a.startedAt, a.endedAt, now) && a.id !== 'main' ? '야근' : null,
+      ].filter(x => x !== null).map(x => ` · ${x}`).join('')
+      return { key: `row-${a.id}`, text: `${a.nick} ${who} · ${where} · 도구 ${a.tools}회${errs}${signs} · ${mins}분 · ${a.description || '-'}`, isOff: a.endedAt !== null, isBad: a.activity === 'failed' }
     })
 
     if (e.surface !== 'terminal') {

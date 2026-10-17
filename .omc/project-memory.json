@@ -90,6 +90,12 @@
       "accessCount": 1,
       "lastAccessed": 1792247705061,
       "type": "file"
+    },
+    {
+      "path": "hooks/watch.ts",
+      "accessCount": 1,
+      "lastAccessed": 1792248139010,
+      "type": "file"
     }
   ],
   "userDirectives": []

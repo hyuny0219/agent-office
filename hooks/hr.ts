@@ -37,6 +37,10 @@ export const RANKS = [
 
 export const rankOf = (xp: number) => [...RANKS].reverse().find(r => xp >= r.xp) ?? RANKS[0]
 
+/** 근태 알림을 한 번 받았다 */
+export const warn = (book: HrBook, nick: string): HrBook =>
+  ({ ...book, employees: book.employees.map(e => (e.nick === nick ? { ...e, alarms: e.alarms + 1 } : e)) })
+
 /** 부서 팀장: 일을 한 번이라도 한 직원 중 경력(xp)이 가장 높은 사람 */
 export const leadOf = (book: HrBook, dept: Dept): Employee | undefined =>
   book.employees.filter(e => e.dept === dept && e.jobs > 0).sort((a, b) => b.xp - a.xp || a.hiredAt - b.hiredAt)[0]
@@ -94,7 +98,7 @@ export function migrate(stored: unknown): HrBook | null {
       ...(e as object),
       nick: e.nick as string, dept: isDept(e.dept) ? e.dept : 'ops', type: typeof e.type === 'string' ? e.type : 'agent',
       xp: num(e.xp, 0), jobs: num(e.jobs, 0), done: num(e.done, 0), failed: num(e.failed, 0), toolErrors: num(e.toolErrors, 0),
-      reworks: num(e.reworks, 0), avgScore: numOrNull(e.avgScore), lastScore: numOrNull(e.lastScore), hiredAt: num(e.hiredAt, 0), lastAt: numOrNull(e.lastAt),
+      reworks: num(e.reworks, 0), alarms: num(e.alarms, 0), avgScore: numOrNull(e.avgScore), lastScore: numOrNull(e.lastScore), hiredAt: num(e.hiredAt, 0), lastAt: numOrNull(e.lastAt),
     }))
   const rawLessons = typeof v.lessons === 'object' && v.lessons !== null ? v.lessons as Record<string, unknown> : {}
   const lessons: HrBook['lessons'] = {}
@@ -183,7 +187,7 @@ export function assign(book: HrBook, dept: Dept, busy: ReadonlySet<string>): Emp
 }
 
 export function hire(book: HrBook, nick: string, dept: Dept, type: string, now: number): { book: HrBook; employee: Employee } {
-  const employee: Employee = { nick, dept, type, xp: 0, jobs: 0, done: 0, failed: 0, toolErrors: 0, reworks: 0, avgScore: null, lastScore: null, hiredAt: now, lastAt: null }
+  const employee: Employee = { nick, dept, type, xp: 0, jobs: 0, done: 0, failed: 0, toolErrors: 0, reworks: 0, alarms: 0, avgScore: null, lastScore: null, hiredAt: now, lastAt: null }
   return { book: { ...book, employees: [...book.employees, employee] }, employee }
 }
 
@@ -246,7 +250,7 @@ export function briefOf(book: HrBook, e: Employee, now?: number): string | null 
   const lines = [
     '[사내 인사 메모 · agent-office]',
     `담당: ${dept.ko} ${e.nick} ${rank}${lead !== undefined && lead.nick !== e.nick ? ` (팀장 ${lead.nick} ${rankOf(lead.xp).ko})` : lead?.nick === e.nick ? ' · 팀장' : ''}.` +
-      (e.jobs > 0 ? ` 지난 기록: 완료 ${e.done} · 실패 ${e.failed} · 도구 오류 ${e.toolErrors}${e.reworks > 0 ? ` · 재작업 ${e.reworks}` : ''}, 최근 평가 ${gradeOf(e.lastScore ?? 0)}.` : ' 첫 업무입니다.'),
+      (e.jobs > 0 ? ` 지난 기록: 완료 ${e.done} · 실패 ${e.failed} · 도구 오류 ${e.toolErrors}${e.reworks > 0 ? ` · 재작업 ${e.reworks}` : ''}${e.alarms > 0 ? ` · 근태 알림 ${e.alarms}` : ''}, 최근 평가 ${gradeOf(e.lastScore ?? 0)}.` : ' 첫 업무입니다.'),
   ]
   const lessons = (book.lessons[e.dept] ?? [])
     .filter(l => l.count >= 2 && (now === undefined || now - l.lastAt <= LESSON_TTL_MS))
