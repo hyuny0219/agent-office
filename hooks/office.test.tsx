@@ -10,6 +10,7 @@ import { agoText, cardOf, durationText, findEmployee, jobsIn, reportOf } from '.
 import { CONTROL_EVERY, effectText, enroll, markHit, MIN_CONTROL, MIN_MEMO, settle, verdictOf } from './trial'
 import { callKeyOf, errorKeyOf, isAlarm, isOvertime, isPolling, nudgeOf, OVERTIME_MS, stepOf } from './watch'
 import { activityOf, encodeCells, koNick, layoutOf, nickFor, Office, PLAN_ROWS } from './scene'
+import { accuracyLines, accuracyOf, FOLLOW_MS, followUp, IDLE_MS, isRejectTrusted, isSimilar, judgeOf, pickFor, reinstate, reorgOf } from './org'
 
 const agent = (id: string, over: Partial<OfficeAgent> = {}): OfficeAgent => ({
   id, type: 'builder', nick: 'BEAR', dept: 'dev', description: '빌드', model: null, startedAt: 0, endedAt: null, activity: 'type', tool: 'Edit', tools: 3, ...over,
@@ -805,6 +806,185 @@ test('결재: 보고 없이 끝난 일은 결재자를 부르지 않고 보류�
   expect(asked).toBe(0)
   expect(toasts.join()).toContain('보류')
   expect(JSON.stringify(await $.command.run({ command: 'office', args: 'hr', ...RUN }))).not.toContain('결재 반려 1')
+})
+
+test('조직: 비슷한 일을 잘 끝낸 직원을 고르고, 결재는 후속 수정으로 맞았는지 재며, 계속 나쁘거나 오래 일이 없으면 내보낸다', () => {
+  // 비슷한 일: 짧은 쪽 낱말의 절반 이상이 겹친다(조사가 붙어도 같은 낱말)
+  expect(isSimilar('빌드 고치기', '빌드를 고쳐')).toBe(true)
+  expect(isSimilar('README 오타 고치기', 'readme 고치기')).toBe(true)
+  expect(isSimilar('문서 정리', '빌드 고치기')).toBe(false)
+  expect(isSimilar('', '빌드')).toBe(false)
+  // 짧은 영문 낱말은 그대로 같을 때만
+  expect(isSimilar('go', 'golang')).toBe(false)
+  expect(isSimilar('go api', 'golang apis')).toBe(false)
+  expect(isSimilar('run tests', 'test runner')).toBe(true)
+
+  const rec = (over: Partial<JobRecord>): JobRecord => ({ nick: 'PANDA', dept: 'dev', job: 1, description: 'README 고치기', startedAt: 0, endedAt: 100, outcome: 'done', score: 13, errors: 0, isCheckFailed: false, isReworked: false, alarms: 0, ...over })
+  let b: HrBook = hire(hire(emptyBook(), 'BEAR', 'dev', 'builder', 0).book, 'PANDA', 'dev', 'builder', 1).book
+  b = { ...b, employees: b.employees.map(e => (e.nick === 'BEAR' ? { ...e, xp: 40, jobs: 3, avgScore: 8 } : { ...e, xp: 10, jobs: 1, avgScore: 6 })), log: [rec({})] }
+  expect(pickFor(b, 'dev', new Set(), 'README 오타 고치기')).toEqual({ employee: b.employees[1], why: '비슷한 일 1건을 잘 끝냄' })
+  // 비슷한 일이 없으면 평균 평가로, 고를 사람이 하나면 까닭 없이, 아무도 없으면 null(새로 뽑는다)
+  expect(pickFor(b, 'dev', new Set(), '배포 스크립트')?.why).toBe('평균 평가 B(8.0)')
+  expect(pickFor(b, 'dev', new Set(['PANDA']), 'README 고치기')).toEqual({ employee: b.employees[0], why: null })
+  expect(pickFor(b, 'qa', new Set(), '리뷰')).toBeNull()
+  // 감점을 유예한 반려(결재자의 반려가 자주 빗나감)는 그르친 일로 치지 않는다
+  expect(pickFor({ ...b, log: [rec({ approval: 'rejected', isWaived: true })] }, 'dev', new Set(), 'README 오타 고치기')?.employee.nick).toBe('PANDA')
+  expect(pickFor({ ...b, log: [rec({ approval: 'rejected' })] }, 'dev', new Set(), 'README 오타 고치기')?.employee.nick).toBe('BEAR')
+  // 비슷한 일을 그르쳤으면(반려·재작업) 오히려 뒤로 간다
+  expect(pickFor({ ...b, log: [rec({ isReworked: true })] }, 'dev', new Set(), 'README 오타 고치기')?.employee.nick).toBe('BEAR')
+
+  // 후속 수정: 그 일을 한 직원 말고 다른 사람이 10분 안에 같은 파일을 고치면 적는다
+  const at = 1_000
+  const jobs = [1, 2, 3, 4].map(job => rec({ job, endedAt: at, files: 1, approval: 'rejected', approver: 'BEAR' }))
+  let w: HrBook = { ...b, log: jobs, handoffs: [1, 2, 3, 4].map(job => ({ agentId: `p${job}`, nick: 'PANDA', files: [`/r/${job}.ts`], endedAt: at, job })) }
+  // 같은 직원(PANDA)이 다음 일에서 제 파일을 더 고친 것은 세지 않는다
+  expect(followUp(w, '/r/1.ts', 'PANDA', at + 1)).toBe(w)
+  expect(followUp(w, '/r/1.ts', 'BOSS', at + FOLLOW_MS + 1)).toBe(w)
+  w = followUp(w, '/r/1.ts', 'BOSS', at + 1)
+  expect(w.log.find(r => r.job === 1)?.isFollowedUp).toBe(true)
+  // 지켜보는 동안은 판정하지 않고(고쳐졌으면 바로), 지나면 아무도 안 고친 반려는 빗나간 반려
+  expect(judgeOf(w.log.find(r => r.job === 2)!, at + 1)).toBeNull()
+  expect(judgeOf(w.log.find(r => r.job === 1)!, at + 1)).toBe('right-reject')
+  const later = at + FOLLOW_MS + 1
+  expect(judgeOf(w.log.find(r => r.job === 2)!, later)).toBe('doubtful')
+  expect(judgeOf(rec({ approval: 'approved', files: 1, isFollowedUp: true }), later)).toBe('missed')
+  expect(judgeOf(rec({ approval: 'approved', files: 0 }), later)).toBeNull()
+  expect(judgeOf(rec({ approval: 'exempt', files: 1 }), later)).toBeNull()
+  expect(accuracyOf(w, later)).toEqual([{ approver: 'BEAR', judged: 4, right: 1, missed: 0, doubtful: 3, rejects: 4, rightRejects: 1 }])
+  // 판정된 반려 4건 중 1건만 맞았다(1/3 아래): 이 결재자의 반려는 감점하지 않는다
+  expect(isRejectTrusted(w, 'BEAR', later)).toBe(false)
+  expect(isRejectTrusted(w, 'BEAR', at + 1)).toBe(true)
+  expect(isRejectTrusted(w, 'BOSS', later)).toBe(true)
+  expect(accuracyLines(w, later).join('\n')).toContain('개발팀장 BEAR(곰): 판정 4건 · 맞음 1(25%) · 빗나간 반려 3 · 반려 감점 유예')
+  const bear = b.employees[0]!
+  expect(decisionToast(bear, { kind: 'review', approver: 'BOSS', approverTitle: '대표 BOSS' }, '빌드', { verdict: 'rejected', notes: [] }, 0)).toContain('반려 (감점 유예')
+  expect(decide(b, 'PANDA', 1, 'approved', 3, 'BEAR').book.log[0]?.approver).toBe('BEAR')
+  expect(decide(b, 'PANDA', 1, 'rejected', 0, 'BEAR').book.log[0]).toMatchObject({ approval: 'rejected', isWaived: true, score: 13 })
+
+  // 조직 개편: 업무 5건 이상에 평균이 0 아래면 권고사직, 2건 이하로 30일 넘게 일이 없으면 계약 종료, 일하는 중이면 그대로
+  const now = IDLE_MS + 10
+  const org: HrBook = { ...b, employees: [
+    { ...bear, nick: 'MOLE', jobs: 5, avgScore: -2, lastAt: now },
+    { ...bear, nick: 'SEAL', jobs: 1, avgScore: 8, lastAt: 5 },
+    { ...bear, nick: 'LYNX', jobs: 6, avgScore: -1, lastAt: now },
+    bear,
+  ] }
+  const r = reorgOf(org, new Set(['LYNX']), now)
+  expect(r.gone.map(e => [e.nick, e.reason])).toEqual([['MOLE', '권고사직: 업무 5건, 최근 평균 평가 D(-2.0)'], ['SEAL', '계약 종료: 30일 동안 일이 없음']])
+  expect(r.book.employees.map(e => e.nick)).toEqual(['LYNX', 'BEAR'])
+  expect(r.book.retired.map(e => e.nick)).toEqual(['MOLE', 'SEAL'])
+  expect(reorgOf(r.book, new Set(['LYNX']), now).gone).toEqual([])
+  // 떠난 직원은 명부에 남고(인사카드), 예전 기록에는 빈 명부로 채운다
+  expect(migrate(r.book)?.retired.map(e => [e.nick, e.retiredAt])).toEqual([['MOLE', now], ['SEAL', now]])
+  expect([migrate({ employees: [] })?.retired, migrate({ employees: [] })?.isReorganizing]).toEqual([[], true])
+  expect(cardOf(r.book, findEmployee(r.book, 'mole')!, now)).toContain('퇴사 방금 · 권고사직')
+  // 떠난 직원이 다시 일을 맡았으면 새로 뽑지 않고 그 기록 그대로 복직
+  const back = reinstate(r.book, 'SEAL')
+  expect([back.employees.map(e => e.nick), back.retired.map(e => e.nick), 'retiredAt' in back.employees[2]!]).toEqual([['LYNX', 'BEAR', 'SEAL'], ['MOLE'], false])
+  expect(reinstate(r.book, 'NOBODY')).toBe(r.book)
+})
+
+test('조직: 비슷한 일을 한 직원에게 맡기고(까닭은 지시·메신저에), 승인한 일을 BOSS가 고치면 놓친 승인으로 재며, 끝난 뒤 성과 나쁜 직원을 내보낸다', async ($, on) => {
+  let seed: HrBook = hire(hire(hire(emptyBook(), 'BEAR', 'dev', 'builder', 0).book, 'PANDA', 'dev', 'builder', 1).book, 'MOLE', 'dev', 'builder', 2).book
+  seed = {
+    ...seed,
+    employees: seed.employees.map(e => (e.nick === 'BEAR' ? { ...e, xp: 40, jobs: 3, done: 3, avgScore: 8, lastAt: 4000 }
+      : e.nick === 'PANDA' ? { ...e, xp: 10, jobs: 1, done: 1, avgScore: 6, lastAt: 4000 } : { ...e, jobs: 5, failed: 5, avgScore: -3, lastAt: 4000 })),
+    log: [{ nick: 'PANDA', dept: 'dev', job: 1, description: 'README 고치기', startedAt: 0, endedAt: 100, outcome: 'done', score: 6, errors: 0, isCheckFailed: false, isReworked: false, alarms: 0 }],
+    isApprovalNoticed: true,
+  }
+  const store = new Map<string, unknown>([['hr', seed]])
+  on('store.get', (_$, e) => ({ value: store.get(e.key) }))
+  on('store.set', (_$, e) => {
+    store.set(e.key, e.value)
+    return { value: undefined }
+  })
+  on('clock.now', () => ({ value: 5000 }))
+  let prompt = ''
+  on('agent.spawn', (_$, e) => {
+    prompt = e.prompt
+    return { model: 'm', agentId: 'p1' }
+  })
+  let status: 'running' | 'completed' = 'running'
+  on('agent.list', () => ({ value: [{ id: 'p1', description: 'README 오타 고치기', type: 'builder', status }] }))
+  const toasts: string[] = []
+  on('ui.toast', (_$, e) => {
+    toasts.push(JSON.stringify(e))
+    return { value: undefined }
+  })
+  on('model.complete', () => ({ value: { isAnswered: true, text: '승인', usage: { input_tokens: 1, output_tokens: 1 } } }) as never)
+  on('tool.call', (_$, e) => (e.tool === 'Agent' ? { result: { status: 'completed', agentId: 'p1', content: [] } } as never : { result: 'ok' }))
+  on('turn.complete', () => ({ text: '' }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+
+  await $.agent.spawn({ tool_use_id: 'tp', prompt: '오타를 고쳐', description: 'README 오타 고치기', subagentType: 'builder', ...SPAWN })
+  expect(prompt).toContain('담당: 개발팀 PANDA 사원')
+  expect(prompt).toContain('배정 사유: 비슷한 일 1건을 잘 끝냄.')
+  const ui = await $.ui.mount({ plugin: 'agent-office', surface: 'terminal', component: 'Pane', requestId: 'agent-office', props: PROPS, viewport: { columns: 96, rows: 50 } })
+  expect((await ui.find({ key: 'feed-0' }))?.text).toContain('BOSS → PANDA (지시): README 오타 고치기 (배정: 비슷한 일 1건을 잘 끝냄) — 오타를 고쳐')
+
+  await $.tool.call({ tool: 'Edit', file_path: '/r/README.md', old_string: 'a', new_string: 'b', agentId: 'p1' })
+  // 그 일을 한 직원이 제 파일을 더 고친 것은 후속 수정이 아니다
+  await $.tool.call({ tool: 'Edit', file_path: '/r/README.md', old_string: 'b', new_string: 'c', agentId: 'p1' })
+  await $.tool.call({ tool: 'Read', file_path: '/r/a.md', agentId: 'p1' } as never)
+  status = 'completed'
+  await $.turn.complete({ answer: '고쳤습니다', durationMs: 1, isAborted: false, turnId: 'tp', agentId: 'p1', reason: 'answer' })
+  await $.tool.call({ tool: 'Agent', description: 'README 오타 고치기', prompt: '오타를 고쳐', subagent_type: 'builder' } as never)
+  expect(toasts.join()).toContain('개발팀장 BEAR(곰 대리) 결재: PANDA \\"README 오타 고치기\\" 승인')
+  // 끝난 뒤(결재까지) 성과가 계속 나쁜 MOLE을 내보낸다. 일하던 PANDA·팀장 BEAR는 남는다
+  await $.tool.call({ tool: 'Read', file_path: '/r/b.md' } as never)
+  expect(toasts.join()).toContain('조직 개편이 켜져 있습니다')
+  expect(toasts.join()).toContain('인사 발령: 개발팀 MOLE 사원 퇴사 · 권고사직: 업무 5건, 최근 평균 평가 D(-3.0)')
+  expect(store.get('hr')).toMatchObject({ employees: [{ nick: 'BEAR' }, { nick: 'PANDA' }], retired: [{ nick: 'MOLE' }] })
+
+  // 승인한 일을 BOSS가 곧 고쳤다: 재작업 감점과 함께 결재는 놓친 승인으로 잰다
+  await $.tool.call({ tool: 'Edit', file_path: '/r/README.md', old_string: 'c', new_string: 'd' })
+  expect(toasts.join()).toContain('BOSS가 PANDA의 작업(README.md)을 다시 고쳤습니다')
+  const report = JSON.stringify(await $.command.run({ command: 'office', args: 'report', ...RUN }))
+  expect(report).toContain('결재: 승인 1 · 반려 0 · 전결 0')
+  expect(report).toContain('개발팀장 BEAR(곰): 판정 1건 · 맞음 0(0%) · 놓친 승인 1')
+  const roster = JSON.stringify(await $.command.run({ command: 'office', args: 'hr', ...RUN }))
+  expect(roster).toContain('조직 개편: 켜짐')
+  expect(roster).toContain('떠난 직원(1명)')
+  expect(JSON.stringify(await $.command.run({ command: 'office', args: 'hr MOLE', ...RUN }))).toContain('· 퇴사 (builder)')
+  expect(JSON.stringify(await $.command.run({ command: 'office', args: 'reorg', ...RUN }))).toContain('조직 개편: 켜짐')
+  expect(JSON.stringify(await $.command.run({ command: 'office', args: 'reorg off', ...RUN }))).toContain('직원을 내보내지 않습니다')
+  expect(JSON.stringify(await $.command.run({ command: 'office', args: 'reorg', ...RUN }))).toContain('조직 개편: 꺼짐')
+})
+
+test('조직 개편: 한 번에 함께 끝난 사람은 모두 평가가 끝나기 전에는 내보내지 않는다(앞사람 평가 뒤에도)', async ($, on) => {
+  const now = IDLE_MS + 10_000
+  // BEAR는 한 건 하고 30일 넘게 쉬었다(이번 일을 평가하기 전에는 계약 종료 대상으로 보인다)
+  let seed: HrBook = hire(emptyBook(), 'BEAR', 'dev', 'builder', 0).book
+  seed = { ...seed, employees: seed.employees.map(e => ({ ...e, jobs: 1, done: 1, avgScore: 13, lastAt: 0 })), isApproving: false }
+  const store = new Map<string, unknown>([['hr', seed]])
+  on('store.get', (_$, e) => ({ value: store.get(e.key) }))
+  on('store.set', (_$, e) => {
+    store.set(e.key, e.value)
+    return { value: undefined }
+  })
+  on('clock.now', () => ({ value: now }))
+  let n = 0
+  on('agent.spawn', () => ({ model: 'm', agentId: ++n === 1 ? 'r1' : 'd1' }))
+  let status: 'running' | 'done' = 'running'
+  on('agent.list', () => ({ value: [
+    { id: 'r1', description: '찾기', type: 'Explore', status: status === 'done' ? 'failed' : 'running' },
+    { id: 'd1', description: '빌드', type: 'builder', status: status === 'done' ? 'completed' : 'running' },
+  ] }))
+  const toasts: string[] = []
+  on('ui.toast', (_$, e) => {
+    toasts.push(JSON.stringify(e))
+    return { value: undefined }
+  })
+  on('tool.call', () => ({ result: 'ok' }))
+  on('turn.complete', () => ({ text: '' }))
+  await $.agent.spawn({ tool_use_id: 'r', prompt: '찾아', description: '찾기', subagentType: 'Explore', ...SPAWN })
+  await $.agent.spawn({ tool_use_id: 'd', prompt: '만들어', description: '빌드', subagentType: 'builder', ...SPAWN })
+  status = 'done'
+  // 한 번의 동기화에서 둘이 끝난다: 앞사람(OWL, 실패)의 평가 뒤 조직 개편이 아직 평가 안 된 BEAR를 내보내면 안 된다
+  await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 'rr', agentId: 'r1', reason: 'answer' })
+  expect(toasts.join()).not.toContain('퇴사')
+  expect(store.get('hr')).toMatchObject({ employees: [{ nick: 'BEAR', jobs: 2, lastAt: now }, { nick: 'OWL' }], retired: [] })
 })
 
 test('/office hr off면 업무 지시를 건드리지 않고, 평가·명부는 계속 남긴다', async ($, on) => {

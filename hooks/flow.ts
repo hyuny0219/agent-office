@@ -7,11 +7,12 @@ import type { OfficeActivity, OfficeAgent, Streak, TrialTicket } from '../types'
 import { CHECK_PENALTY, decide, DEPT_INFO, DEPTS, deptOf, gradeOf, handOff, hire, lessonsFor, warn, rankOf, record, review, rework, REWORK_PENALTY, salaryOf } from './hr'
 import { APPROVAL_TIMEOUT_MS, APPROVER_MODEL, decisionOf, decisionToast, planNoteOf, planRequestOf, planReviewerOf, planReviewOf, REJECT_PENALTY, rejectNoteOf, requestOf, routeOf } from './approval'
 import type { Facts } from './approval'
-import { approvalLineOf, replyOf, reportLineOf } from './speech'
+import { approvalLineOf, hrLineOf, replyOf, reportLineOf } from './speech'
+import { followUp, isRejectTrusted, reinstate, reorgOf } from './org'
 import { settle } from './trial'
 import { callKeyOf, ERROR_STREAK, errorKeyOf, errorToast, isAlarm, isOvertime, isPolling, nudgeOf, REPEAT_STREAK, repeatToast, stepOf } from './watch'
 import { shortType } from './scene'
-import { admit, agentsOf, fresh, hrOf, MEET_MS, meet, nickOfId, patch, save, saveHr, speak } from './store'
+import { admit, agentsOf, fresh, hold, hrOf, keptNow, MEET_MS, meet, nickOfId, patch, release, save, saveHr, speak } from './store'
 
 /** 파일을 고치는 도구(재작업 판정에 쓴다) */
 export const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
@@ -30,8 +31,8 @@ export const isCheckCommand = (e: object): boolean => {
 
 /** 결재에 쓸 지시·보고(에이전트 id →). 패널이 구독하는 상태에 두지 않는다: 길어서 쓸 때마다 패널로 실려 간다 */
 export const papers = new Map<string, { task?: string; report?: string }>()
-/** 진행 중인 결재(에이전트 id → 반려면 띄운 쪽이 읽을 글) */
-export const approvals = new Map<string, Promise<string | null>>()
+/** 진행 중인 결재(에이전트 id → 결재·의견 남기기·조직 개편이 끝나면 풀린다) */
+export const approvals = new Map<string, Promise<void>>()
 /** 띄운 쪽이 아직 못 읽은 결재 결과(메인은 다음 도구 결과 뒤에 읽는다) */
 let notes: { agentId: string; parentId: string; text: string }[] = []
 const MAX_NOTES = 20
@@ -39,9 +40,24 @@ const MAX_NOTES = 20
 export const movedText = (r: { promotedTo: string | null; demotedTo: string | null }): string =>
   r.promotedTo !== null ? ` · ${r.promotedTo} 승진!` : r.demotedTo !== null ? ` · ${r.demotedTo}(으)로 강등` : ''
 
-/** 끝난 일을 평가해 인사 기록에 반영하고 알린다 */
+/**
+ * 끝난 일을 평가해 인사 기록에 반영하고 알린다. 부르는 쪽이 그 직원을 붙잡아(hold) 두고 부른다:
+ * 평가·결재가 다 끝나면 놓고(release) 조직 개편을 본다(결재 반려까지 든 평균으로, 덜 끝난 사람을 내보내지 않도록)
+ */
 async function appraise($: EngineInterface, a: OfficeAgent, isDone: boolean, isKilled: boolean) {
-  if (a.id === 'main') return
+  /** 결재 쪽에 넘겼으면 그쪽이 다 끝난 뒤에 놓는다 */
+  let isPassed = false
+  try {
+    isPassed = await review1($, a, isDone, isKilled)
+  } finally {
+    if (!isPassed) release(a.nick)
+  }
+  if (!isPassed) await reorganize($)
+}
+
+/** 평가 한 건. 결재에 올렸으면 true(그 결재가 끝나면 직원을 놓고 조직 개편을 본다) */
+async function review1($: EngineInterface, a: OfficeAgent, isDone: boolean, isKilled: boolean): Promise<boolean> {
+  if (a.id === 'main') return false
   // 교육 효과 측정: 이번 업무가 든 쪽과 재발한 실수를 교훈별로 더한다(지금 사본에서 읽는다: 동기화 뒤에 적힌 재발도 들도록)
   // 집계한 업무에서는 실험 기록을 지운다(같은 업무를 두 번 세지 않도록)
   // 평가에 쓰는 칸도 이 사본에서 읽는다(동기화가 읽은 뒤에 난 오류·검증 실패·근태 알림도 들도록)
@@ -58,8 +74,10 @@ async function appraise($: EngineInterface, a: OfficeAgent, isDone: boolean, isK
     const at = await $.clock.now()
     await saveHr($, x => settle(x, settled, at))
   }
-  const b = await hrOf($)
-  if (!b.employees.some(e => e.nick === a.nick)) await saveHr($, x => hire(x, a.nick, a.dept ?? deptOf(a.type), a.type, a.startedAt).book)
+  // 명부에 없으면 채용한다. 떠난 직원이면 새로 뽑지 않고 복직시킨다(같은 별칭이 두 사람이 되지 않도록)
+  await saveHr($, x => x.employees.some(e => e.nick === a.nick) ? x
+    : x.retired.some(e => e.nick === a.nick) ? reinstate(x, a.nick)
+    : hire(x, a.nick, a.dept ?? deptOf(a.type), a.type, a.startedAt).book)
   const now = await $.clock.now()
   let result: ReturnType<typeof review> | null = null
   let xpBefore = 0
@@ -72,35 +90,68 @@ async function appraise($: EngineInterface, a: OfficeAgent, isDone: boolean, isK
     const logged = record(result.book, {
       nick: a.nick, dept: a.dept ?? deptOf(a.type), job, description: got.description, startedAt: got.startedAt, endedAt: got.endedAt ?? now,
       outcome: isDone ? 'done' : isKilled ? 'killed' : 'failed', score: result.score, errors: got.errors ?? 0,
-      isCheckFailed: isDone && got.isCheckFailed === true, isReworked: false, alarms: got.alarms ?? 0,
+      isCheckFailed: isDone && got.isCheckFailed === true, isReworked: false, alarms: got.alarms ?? 0, files: (got.files ?? []).length,
       ...(employee === undefined ? {} : { salary: salaryOf(result.book, employee) }),
     })
-    return isDone ? handOff(logged, { agentId: a.id, nick: a.nick, files: got.files ?? [], endedAt: now, job }) : logged
+    // 인계 시각은 기록의 끝난 시각과 같게(후속 수정·재작업을 같은 창으로 잰다)
+    return isDone ? handOff(logged, { agentId: a.id, nick: a.nick, files: got.files ?? [], endedAt: got.endedAt ?? now, job }) : logged
   })
   const r = result as ReturnType<typeof review> | null
-  if (r === null) return
+  if (r === null) return false
   const e = r.book.employees.find(x => x.nick === a.nick)
   // 끝낸 일의 보고를 결재에 올린다(기다리지 않는다: 결재자가 답하는 사이에도 사무실은 돈다)
+  let isPassed = false
   if (!(isDone && e !== undefined && r.book.isApproving)) papers.delete(a.id)
   else {
+    isPassed = true
     const facts: Facts = {
       description: got.description, task: papers.get(a.id)?.task ?? '', report: papers.get(a.id)?.report ?? '', tools: got.tools, errors: got.errors ?? 0,
       isCheckFailed: got.isCheckFailed === true, alarms: got.alarms ?? 0, files: (got.files ?? []).length, durationMs: now - got.startedAt,
     }
     const parentId = got.parentId ?? 'main'
     // 전결은 이 일을 하기 전 직급으로 가린다(이 일로 오른 직급으로 자기 일을 전결하지 않도록)
-    const pending = approve($, a.nick, e.jobs, xpBefore, facts).catch(() => null)
-    approvals.set(a.id, pending)
-    void pending.then(text => {
-      if (text !== null) notes = [...notes, { agentId: a.id, parentId, text }].slice(-MAX_NOTES)
-    }).finally(() => {
-      approvals.delete(a.id)
-      papers.delete(a.id)
-    })
+    // 결재 → 의견 남기기 → 직원 놓기 → 조직 개편을 한 줄로 잇는다(기다리는 쪽이 이 모두가 끝난 뒤를 본다)
+    const settled = approve($, a.nick, e.jobs, xpBefore, facts).catch(() => null)
+      .then(text => {
+        if (text !== null) notes = [...notes, { agentId: a.id, parentId, text }].slice(-MAX_NOTES)
+      })
+      .finally(() => release(a.nick))
+      .then(() => reorganize($))
+      .catch(() => undefined)
+      .finally(() => {
+        approvals.delete(a.id)
+        papers.delete(a.id)
+      })
+    approvals.set(a.id, settled)
   }
   const rank = e === undefined ? '' : ` ${rankOf(e.xp).ko}`
   const why = isDone && got.isCheckFailed === true ? ` · 테스트·빌드 실패한 채 완료 -${CHECK_PENALTY}` : ''
   $.ui.toast(`${a.nick}${rank} 평가 ${gradeOf(r.score)} (${r.score >= 0 ? '+' : ''}${r.score})${why}${movedText(r)}`)
+  return isPassed
+}
+
+/**
+ * 조직 개편: 계속 성과가 나쁘거나 오래 일이 없는 사람을 내보내고 알린다. 일하는 중이거나 붙잡아 둔 사람
+ * (배정됐는데 아직 안 들어옴, 평가·결재가 덜 끝남)은 건드리지 않는다. 처음 내보낼 때는 한 번 안내한다
+ */
+export async function reorganize($: EngineInterface) {
+  if (!(await hrOf($)).isReorganizing) return
+  await agentsOf($)
+  const now = await $.clock.now()
+  let gone: ReturnType<typeof reorgOf>['gone'] = []
+  let isFirst = false
+  await saveHr($, b => {
+    // 일하는 사람·붙잡아 둔 사람은 저장하는 바로 그때 본다(기다리는 사이 들어오거나 붙잡힌 사람도 들도록)
+    const r = reorgOf(b, keptNow(), now)
+    gone = r.gone
+    isFirst = gone.length > 0 && !b.isReorgNoticed
+    return isFirst ? { ...r.book, isReorgNoticed: true } : r.book
+  })
+  if (isFirst) $.ui.toast('조직 개편이 켜져 있습니다: 계속 평가가 나쁜 직원은 권고사직, 오래 일이 없는 직원은 계약 종료합니다. 떠난 직원의 인사카드는 남습니다. 끄려면 /office reorg off')
+  for (const e of gone) {
+    $.ui.toast(`인사 발령: ${DEPT_INFO[e.dept].ko} ${e.nick} ${rankOf(e.xp).ko} 퇴사 · ${e.reason}`)
+    await speak($, null, null, hrLineOf(`${DEPT_INFO[e.dept].ko} ${e.nick} ${rankOf(e.xp).ko} 퇴사 — ${e.reason}`, now))
+  }
 }
 
 /** 결재: 결재 경로를 정하고, 결재자에게 묻고, 결과를 인사 기록에 적는다. 반려면 띄운 쪽이 읽을 글을 돌려준다 */
@@ -124,6 +175,8 @@ async function approve($: EngineInterface, nick: string, job: number, xpBefore: 
     await saveHr($, x => ({ ...x, isApprovalNoticed: true }))
     $.ui.toast(`결재가 켜져 있습니다: 끝낸 일의 보고마다 ${APPROVER_MODEL}를 한 번 부릅니다. 끄려면 /office approval off`)
   }
+  // 반려가 자주 빗나간 결재자의 반려는 감점하지 않는다(의견은 그대로 전한다)
+  const penalty = isRejectTrusted(b, route.approver, await $.clock.now()) ? REJECT_PENALTY : 0
   const ask = requestOf(e, route, f)
   const reply = await $.model.complete({ model: APPROVER_MODEL, system: ask.system, prompt: ask.prompt, maxTokens: 400, effort: 'low', timeoutMs: APPROVAL_TIMEOUT_MS })
   const d = reply.isAnswered ? decisionOf(reply.text) : null
@@ -133,11 +186,11 @@ async function approve($: EngineInterface, nick: string, job: number, xpBefore: 
   }
   let moved: ReturnType<typeof decide> | null = null
   await saveHr($, x => {
-    moved = decide(x, nick, job, d.verdict, REJECT_PENALTY)
+    moved = decide(x, nick, job, d.verdict, penalty, route.approver)
     return moved.book
   })
   const m = moved as ReturnType<typeof decide> | null
-  $.ui.toast(`${decisionToast(e, route, f.description, d)}${m === null ? '' : movedText(m)}`)
+  $.ui.toast(`${decisionToast(e, route, f.description, d, penalty)}${m === null ? '' : movedText(m)}`)
   await speak($, null, null, approvalLineOf(route.approverTitle,
     `${e.nick} "${f.description}" ${d.verdict === 'approved' ? '승인' : `반려${d.notes[0] === undefined ? '' : ` — ${d.notes[0]}`}`}`, await $.clock.now()))
   return d.verdict === 'rejected' ? rejectNoteOf(e, route, f.description, d) : null
@@ -169,6 +222,16 @@ export function takeNotes(callerId: string, agents: readonly OfficeAgent[]): str
   const mine = notes.filter(n => n.parentId === callerId || (callerId === 'main' && isGone(n.parentId)))
   notes = notes.filter(n => !mine.includes(n))
   return mine.map(n => n.text)
+}
+
+/** 누군가(별칭 by) 파일을 고쳤다: 방금 끝낸 다른 사람의 일이면 그 기록에 후속 수정을 적는다(결재 정확도). 재작업 감점보다 먼저 본다 */
+export async function checkFollowUp($: EngineInterface, file: string, by: string) {
+  if ((await hrOf($)).handoffs.length === 0) return
+  const now = await $.clock.now()
+  // 고칠 것이 없으면 쓰지 않는다(파일을 고칠 때마다 인사 기록을 다시 쓰지 않도록)
+  const b = await hrOf($)
+  if (followUp(b, file, by, now) === b) return
+  await saveHr($, b => followUp(b, file, by, now))
 }
 
 /** BOSS가 파일을 고쳤다: 방금 끝낸 직원의 파일이면 재작업으로 깎는다 */
@@ -216,29 +279,40 @@ async function syncOnce($: EngineInterface) {
     if (activity === 'done' && a.activity !== 'done') reports.push([a.id, a.parentId ?? 'main'])
     updates.set(a.id, { activity, name, parentId: a.parentId ?? info.parentId ?? 'main', endedAt: ended ? a.endedAt ?? now : null })
   }
+  // 끝난 사람들은 끝남을 적기 전에 다 붙잡는다(평가하기 전에, 함께 끝난 앞사람의 평가 뒤나 다른 일의 결재 뒤 조직 개편이 내보내지 않도록)
+  for (const f of finished) hold(f.a.nick)
   // 이 mod가 불러와지기 전에 뜬 에이전트도 들인다
   const newcomers = infos.filter(i => !known.some(a => a.id === i.id) && (i.status === 'running' || i.status === 'pending'))
-  if (updates.size > 0 || newcomers.length > 0) {
-    await save($, current => {
-      let list = current.map(a => {
-        const u = updates.get(a.id)
-        return u === undefined ? a : { ...a, ...u }
+  // 평가를 시작하지 못한 사람은 놓는다(저장이나 앞사람 평가가 던져도 세션 내내 붙잡혀 조직 개편에서 빠지지 않도록). 평가는 제가 놓는다
+  let started = 0
+  try {
+    if (updates.size > 0 || newcomers.length > 0) {
+      await save($, current => {
+        let list = current.map(a => {
+          const u = updates.get(a.id)
+          return u === undefined ? a : { ...a, ...u }
+        })
+        // 보고하러 간 사람은 "done!", 받는 쪽은 "thanks!"
+        for (const pair of reports) {
+          list = meet(pair, now + MEET_MS)(list)
+          list = patch(pair[0], a => ({ ...a, say: reportLineOf(a.nick, '', '', now).bubble }))(list)
+          list = patch(pair[1], a => ({ ...a, say: replyOf('thanks!', now) }))(list)
+        }
+        return list
       })
-      // 보고하러 간 사람은 "done!", 받는 쪽은 "thanks!"
-      for (const pair of reports) {
-        list = meet(pair, now + MEET_MS)(list)
-        list = patch(pair[0], a => ({ ...a, say: reportLineOf(a.nick, '', '', now).bubble }))(list)
-        list = patch(pair[1], a => ({ ...a, say: replyOf('thanks!', now) }))(list)
+      for (const i of newcomers) await admit($, { ...fresh(i.id, i.type, i.description, now), name: i.name ?? null, parentId: i.parentId ?? 'main' })
+      // 메신저에는 보고 앞부분
+      for (const [childId, parentId] of reports) {
+        const child = (await agentsOf($)).find(a => a.id === childId)
+        if (child !== undefined) await speak($, null, null, reportLineOf(child.nick, await nickOfId($, parentId), papers.get(childId)?.report ?? '', now).line)
       }
-      return list
-    })
-    for (const i of newcomers) await admit($, { ...fresh(i.id, i.type, i.description, now), name: i.name ?? null, parentId: i.parentId ?? 'main' })
-    // 메신저에는 보고 앞부분
-    for (const [childId, parentId] of reports) {
-      const child = (await agentsOf($)).find(a => a.id === childId)
-      if (child !== undefined) await speak($, null, null, reportLineOf(child.nick, await nickOfId($, parentId), papers.get(childId)?.report ?? '', now).line)
+      for (const f of finished) {
+        started++
+        await appraise($, f.a, f.isDone, f.isKilled)
+      }
     }
-    for (const f of finished) await appraise($, f.a, f.isDone, f.isKilled)
+  } finally {
+    for (const f of finished.slice(started)) release(f.a.nick)
   }
   // 상태를 옮긴 뒤에 본다(방금 끝난 사람을 야근이라 하지 않도록)
   const working = new Set(infos.filter(i => i.status === 'running' || i.status === 'pending').map(i => i.id))

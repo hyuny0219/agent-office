@@ -37,9 +37,10 @@ In the desktop app, where `/plugin` does not run: click + next to the prompt box
 | --- | --- |
 | `/office` | Open the office floor plan pane |
 | `/office hr` | HR records: staff, rank, salary, latest review, done/failed, tool errors, reworks and attendance alerts by department, plus each department's repeated mistakes |
-| `/office hr <nick>` | One employee's personnel card: rank and experience to the next rank, salary breakdown, record, last 5 jobs, the department's repeated mistakes (`bear` or the Korean name both work) |
+| `/office hr <nick>` | One employee's personnel card: rank and experience to the next rank, salary breakdown, record, last 5 jobs, the department's repeated mistakes (`bear` or the Korean name both work, former employees too) |
 | `/office approval on` / `off` | Turn approvals on or off (on by default): team leads sign off finished jobs' reports, and the planning lead reviews confirmed plans |
-| `/office report [today\|week]` | Daily (last 24 hours, the default) or weekly (last 7 days) report: totals and per-department results, hours worked and labor cost, MVP, and jobs to look at (failed, finished with failing tests, reworked, attendance alerts) |
+| `/office reorg on` / `off` | Turn reorganization on or off (on by default): employees with persistently poor reviews are asked to resign, and long-idle ones see their contracts end |
+| `/office report [today\|week]` | Daily (last 24 hours, the default) or weekly (last 7 days) report: totals and per-department results, hours worked and labor cost, approval counts and each approver's accuracy, MVP, and jobs to look at (failed, finished with failing tests, reworked, attendance alerts, rejected) |
 | `/office hr on` / `off` | Turn the HR memo in task briefs and the attendance notices on or off (on by default) |
 | `/office hr ab on` / `off` | Turn training-effect measurement (a control group that gets no mistake list) on or off (on by default) |
 
@@ -69,7 +70,8 @@ The floor plan is drawn in pixels in the terminal (72 to 140 columns wide, 27 ro
 ## HR system
 
 - **Departments** come from the agent type: Dev, Research, QA, Planning, Docs and Ops.
-- **Employees**: one nickname is one person. When work comes in, the most experienced employee of that department who is free takes it; if nobody is free, the department hires. Records persist across sessions.
+- **Employees**: one nickname is one person. Records persist across sessions.
+- **Assignment**: when work comes in, the **best fit** among the department's free employees takes it; if nobody is free, the department hires. Fit is the average review, plus 3 per similar job done well (up to 3; similar means at least half the words of the task description overlap), minus 4 per similar job rejected, reworked or failed (up to 2), plus experience (up to 2). When there was a choice, the reason ("did 2 similar jobs well") is added to the HR memo and the order line in the messenger.
 - **Reviews** use real records only: done +10, failed −5 (killed −3), −1 per tool error or denial (at most −5), +3 for finishing with no errors after actually using tools → grades S, A, B, C, D.
   - **Failed check**: finishing while the last test or build command (`npm test`, `tsc`, `pytest`, …; other commands such as `grep` are ignored) failed costs −4.
   - **Rework**: if BOSS edits a file the employee changed within 10 minutes of them finishing, that job loses 4 points (once per job).
@@ -115,6 +117,16 @@ No tool call is ever blocked. What goes up for approval is **the report of a fin
 - **Rejection**: what to fix shows as a toast, and the main loop reads it along with the report (for a background job, after its next tool result). The main loop decides whether to hand the job back. A rejection costs that job -3 and shows on the personnel card and in reports.
 - **Plan review**: when the main loop confirms a plan (ExitPlanMode), the planning lead checks for verification steps, scope, risks and guards against the departments' repeated mistakes. If something is missing it only adds a note; it never blocks.
 - The approver is a cheap model (haiku), called once per approval (8-second limit, with a one-time notice the first time). It can be wrong; if the job ended without a report or the approver gives no usable answer, the approval is left pending and scores are untouched. To skip the cost, run `/office approval off`.
+- **Approval accuracy**: whether an approval was right is judged by whether **someone else (BOSS or another employee) edits the same files within 10 minutes** of the job ending. Approved but then fixed is a missed approval; rejected but nobody fixes anything is a doubtful rejection. Jobs that changed no files (research, reading) can't be judged and are left out. Each approver's accuracy appears in `/office report`. Once an approver has 3 or more judged rejections and fewer than a third were right, their rejections **no longer cost points** and don't count against the employee when picking the best fit (the notes still reach the main loop). An employee editing their own files again in a later job doesn't count as a follow-up. A follow-up edit may just be the next step of the work, so this is a rough yardstick.
+
+### Reorganization
+
+With `/office reorg on` (the default), the roster is checked after each job is fully settled (review and approval) and when a session starts. Employees who are working, who were just assigned and are on their way in, or whose review and approval aren't finished are never touched. The first departure comes with a one-time notice.
+
+- **Asked to resign**: 5 or more jobs and a recent average review below 0 (D).
+- **Contract ends**: 2 jobs or fewer and no work for over 30 days.
+
+Departures are announced with a toast and in the messenger (from HR), and stay in `/office hr`'s list of former employees and on their personnel card (`/office hr <nick>`). A former employee's nickname is never reused, so records don't mix; if a job of theirs finishes after they left, they are reinstated rather than hired anew. Departments come from the agent type and employees only take their own department's work, so there is no evidence that someone would do better elsewhere; there are no transfers.
 
 ### Reports
 
@@ -143,6 +155,8 @@ claude plugin validate .
 claude plugin test .
 claude --plugin-dir .
 ```
+
+`hooks/register.tsx` only wires engine events; the work is split up: `store.ts` (state and persistence), `flow.ts` (sync, reviews, approvals, attendance, reorganization), `view.ts` (pane rows, painting the floor plan), `commands.ts` (`/office` text answers). Decisions live in pure modules: `hr.ts` (HR), `org.ts` (assignment, approval accuracy, reorganization), `approval.ts` (approvals), `speech.ts` (chatter), `report.ts` (reports, roster, personnel cards), `trial.ts` (training effect), `watch.ts` (attendance), `scene.ts` (floor plan).
 
 The README screenshots (`docs/office.png`, `docs/office.gif`) are made by running `hooks/scene.ts` itself (needs Pillow):
 

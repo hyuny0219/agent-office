@@ -50,7 +50,7 @@ export type OfficeAgent = {
 /** 평면도 머리 위 말풍선: 영문 짧은 말, 그 말을 한 때, 말투(혼잣말·대화·실수·좋은 소식) */
 export type Bubble = { text: string; at: number; tone: 'self' | 'talk' | 'bad' | 'good' }
 
-export type UtteranceKind = 'order' | 'report' | 'message' | 'self' | 'error' | 'approval'
+export type UtteranceKind = 'order' | 'report' | 'message' | 'self' | 'error' | 'approval' | 'hr'
 
 /** 사내 메신저 한 줄 */
 export type Utterance = { at: number; kind: UtteranceKind; from: string; to?: string; text: string }
@@ -139,7 +139,18 @@ export type JobRecord = {
   salary?: number
   /** 결재 결과(결재 전이거나 보류면 없다) */
   approval?: Approval
+  /** 승인·반려한 결재자의 별칭(대표는 BOSS, 전결이면 없다) */
+  approver?: string
+  /** 그 일에서 고친 파일 수(후속 수정으로 결재 정확도를 잴 수 있는지) */
+  files?: number
+  /** 끝낸 뒤 곧 다른 사람(BOSS나 다른 직원)이 같은 파일을 고쳤는지: 결재 정확도에 쓴다 */
+  isFollowedUp?: boolean
+  /** 반려됐지만 그 결재자의 반려가 자주 빗나가 감점하지 않았는지 */
+  isWaived?: boolean
 }
+
+/** 회사를 떠난 직원: 그때의 인사 기록과 떠난 때·까닭 */
+export type Retiree = Employee & { retiredAt: number; reason: string }
 
 /** 승인·반려·전결 */
 export type Approval = 'approved' | 'rejected' | 'exempt'
@@ -163,6 +174,12 @@ export type HrBook = {
   isApproving: boolean
   /** 결재를 처음 부를 때 비용 안내를 했는지 */
   isApprovalNoticed: boolean
+  /** 조직 개편(권고사직·계약 종료)을 할지(/office reorg on|off) */
+  isReorganizing: boolean
+  /** 조직 개편으로 처음 직원을 내보낼 때 안내를 했는지 */
+  isReorgNoticed: boolean
+  /** 떠난 직원(최근 떠난 것부터). 별칭을 다시 쓰지 않고, 인사카드를 남긴다 */
+  retired: Retiree[]
 }
 
 declare module 'claude-code' {

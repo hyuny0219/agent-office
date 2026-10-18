@@ -78,11 +78,11 @@ export function oopsOf(nick: string, tool: string, text: string, at: number): { 
 }
 
 /** 업무 지시: 띄운 쪽이 직원을 불러 맡긴다 */
-export function orderOf(from: string, to: string, description: string, prompt: string, at: number): { bubble: Bubble; line: Utterance } {
+export function orderOf(from: string, to: string, description: string, prompt: string, at: number, why: string | null = null): { bubble: Bubble; line: Utterance } {
   const body = prompt.split('\n\n[사내 인사 메모')[0] ?? prompt
   return {
     bubble: { text: asciiOf(`${to}, go!`, 'go!'), at, tone: 'talk' },
-    line: said(at, 'order', from, `${description}${body.trim() === '' ? '' : ` — ${body}`}`, to),
+    line: said(at, 'order', from, `${description}${why === null ? '' : ` (배정: ${why})`}${body.trim() === '' ? '' : ` — ${body}`}`, to),
   }
 }
 
@@ -107,6 +107,9 @@ export function messageOf(from: string, to: string, e: object, at: number): { bu
   }
 }
 
+/** 인사 발령(조직 개편 등): 인사팀이 알린다 */
+export const hrLineOf = (text: string, at: number): Utterance => said(at, 'hr', '인사팀', text)
+
 /** 결재·계획 검토 결과(결재자는 평면도에 없을 수 있어 메신저에만) */
 export const approvalLineOf = (from: string, text: string, at: number): Utterance => said(at, 'approval', from, text)
 
@@ -116,7 +119,7 @@ export const pushLine = (feed: readonly Utterance[], u: Utterance): Utterance[] 
 /** 말풍선이 아직 떠 있는가 */
 export const isSpeaking = (b: Bubble | undefined, now: number): b is Bubble => b !== undefined && now - b.at < BUBBLE_MS
 
-const KIND_KO: Record<UtteranceKind, string> = { order: '지시', report: '보고', message: '메시지', self: '혼잣말', error: '', approval: '결재' }
+const KIND_KO: Record<UtteranceKind, string> = { order: '지시', report: '보고', message: '메시지', self: '혼잣말', error: '', approval: '결재', hr: '발령' }
 
 /** 메신저 한 줄: "12초 전 BOSS → BEAR (지시): …" */
 export function lineText(u: Utterance, now: number): string {

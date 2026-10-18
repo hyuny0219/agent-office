@@ -14,7 +14,7 @@ import { agentsOf, hrOf, leadsOf } from './store'
 export const RASTER = 'office'
 /** 평면도 아래에 보이는 메신저 줄 수 */
 export const FEED_SHOWN = 5
-const FEED_COLOR: Record<Utterance['kind'], string | undefined> = { order: 'cyan', report: 'green', message: 'magenta', self: undefined, error: 'red', approval: 'yellow' }
+const FEED_COLOR: Record<Utterance['kind'], string | undefined> = { order: 'cyan', report: 'green', message: 'magenta', self: undefined, error: 'red', approval: 'yellow', hr: 'blue' }
 
 const STATUS_WORD: Record<OfficeActivity, string> = {
   think: '생각 중', type: '작성 중', read: '자료실', bash: '서버실', web: '웹·MCP',

@@ -1,9 +1,10 @@
 // 보고서와 인사 기록. 끝낸 일 기록(book.log)으로 기간별 부서 실적을 내고, 직원 명부와 한 명의 인사카드를 만든다.
 // 시간대를 모르므로 기간은 "지금부터 거슬러" 잰다(오늘 = 최근 24시간, 이번 주 = 최근 7일). 순수 함수만 둔다.
-import type { Employee, HrBook, JobRecord } from '../types'
+import type { Employee, HrBook, JobRecord, Retiree } from '../types'
 import { bonusOf, CHECK_PENALTY, DEPT_INFO, DEPTS, gradeOf, isMuted, LEAD_ALLOWANCE, leadOf, lessonKey, lessonsFor, RANKS, rankOf, REWORK_PENALTY, salaryOf, tipOf } from './hr'
 import { REJECT_PENALTY } from './approval'
 import { CONTROL_EVERY, effectText } from './trial'
+import { accuracyLines } from './org'
 import { koNick } from './scene'
 
 const HOUR_MS = 60 * 60_000
@@ -51,7 +52,7 @@ const flawsOf = (r: JobRecord): string[] => [
   ...(r.isCheckFailed ? ['테스트·빌드 실패한 채 완료'] : []),
   ...(r.isReworked ? ['재작업'] : []),
   ...(r.alarms > 0 ? [`근태 알림 ${r.alarms}`] : []),
-  ...(r.approval === 'rejected' ? ['결재 반려'] : []),
+  ...(r.approval === 'rejected' ? [r.isWaived === true ? '결재 반려(감점 유예)' : '결재 반려'] : []),
 ]
 
 /** 그 일의 인건비(원): 그때 연봉(예전 기록이면 지금 연봉)을 시급으로 환산해 걸린 시간을 곱한다 */
@@ -83,6 +84,8 @@ export function reportOf(book: HrBook, period: Period, now: number): string {
   const worked = list.reduce((s, r) => s + Math.max(0, r.endedAt - r.startedAt), 0)
   const cost = list.reduce((s, r) => s + costOf(book, r), 0)
   lines.push(`전체: 업무 ${tally(list)} · 근무 ${durationText(worked)} · 인건비 약 ${won(cost)}원(연봉을 시급으로 환산)`)
+  const decided = (a: JobRecord['approval']) => list.filter(r => r.approval === a).length
+  if (list.some(r => r.approval !== undefined)) lines.push(`결재: 승인 ${decided('approved')} · 반려 ${decided('rejected')} · 전결 ${decided('exempt')}`)
 
   lines.push('', '부서별:')
   for (const d of DEPTS) {
@@ -105,6 +108,9 @@ export function reportOf(book: HrBook, period: Period, now: number): string {
     lines.push('', `MVP: ${mvp.nick} ${koNick(mvp.nick)}${e === undefined ? '' : ` ${rankOf(e.xp).ko}`} (${mvp.n}건, 평가 합계 ${signed(mvp.total)})`)
   }
 
+  const accuracy = accuracyLines(book, now)
+  if (accuracy.length > 0) lines.push('', ...accuracy)
+
   const flawed = list.filter(r => flawsOf(r).length > 0)
   if (flawed.length > 0) {
     lines.push('', `살펴볼 일(${flawed.length}건${flawed.length > 5 ? ', 최근 5건' : ''}):`)
@@ -115,19 +121,23 @@ export function reportOf(book: HrBook, period: Period, now: number): string {
   return lines.join('\n')
 }
 
-/** 별칭(영문, 대소문자 무관)이나 한글 이름으로 직원을 찾는다 */
-export const findEmployee = (book: HrBook, name: string): Employee | undefined =>
-  book.employees.find(e => e.nick === name.toUpperCase() || koNick(e.nick) === name)
+/** 별칭(영문, 대소문자 무관)이나 한글 이름으로 직원을 찾는다(떠난 직원도) */
+export const findEmployee = (book: HrBook, name: string): Employee | Retiree | undefined =>
+  [...book.employees, ...book.retired].find(e => e.nick === name.toUpperCase() || koNick(e.nick) === name)
+
+const isRetiree = (e: Employee | Retiree): e is Retiree => 'retiredAt' in e
 
 /** /office hr <별칭>: 한 직원의 인사카드 */
-export function cardOf(book: HrBook, e: Employee, now: number): string {
+export function cardOf(book: HrBook, e: Employee | Retiree, now: number): string {
   const rank = rankOf(e.xp)
-  const isLead = leadOf(book, e.dept)?.nick === e.nick
+  const gone = isRetiree(e) ? e : null
+  const isLead = gone === null && leadOf(book, e.dept)?.nick === e.nick
   const next = RANKS.find(r => r.xp > e.xp)
   const lines = [
-    `인사카드: ${e.nick} ${koNick(e.nick)} — ${DEPT_INFO[e.dept].ko} ${rank.ko}${isLead ? ' · 팀장' : ''} (${e.type})`,
+    `인사카드: ${e.nick} ${koNick(e.nick)} — ${DEPT_INFO[e.dept].ko} ${rank.ko}${isLead ? ' · 팀장' : ''}${gone === null ? '' : ' · 퇴사'} (${e.type})`,
+    ...(gone === null ? [] : [`퇴사 ${agoText(gone.retiredAt, now)} · ${gone.reason}`]),
     `경력 ${e.xp}${next === undefined ? ' · 최고 직급' : ` · ${next.ko}까지 ${next.xp - e.xp}`}`,
-    `연봉 ${won(salaryOf(book, e))}만원 = 기본급 ${won(rank.salary)} + 성과급 ${won(bonusOf(e))}${isLead ? ` + 팀장 수당 ${LEAD_ALLOWANCE}` : ''}`,
+    `${gone === null ? '' : '마지막 '}연봉 ${won(salaryOf(book, e))}만원 = 기본급 ${won(rank.salary)} + 성과급 ${won(bonusOf(e))}${isLead ? ` + 팀장 수당 ${LEAD_ALLOWANCE}` : ''}`,
   ]
   if (e.jobs === 0) {
     lines.push(`아직 끝낸 업무가 없습니다 · 입사 ${agoText(e.hiredAt, now)}`)
@@ -159,7 +169,8 @@ export function cardOf(book: HrBook, e: Employee, now: number): string {
 
 /** /office hr: 부서별 직원·직급·연봉·평가, 부서가 반복한 실수 */
 export function rosterText(b: HrBook, now: number): string {
-  const lines = [`에이전트 사무실 인사 기록 (업무 지시 인사 메모: ${b.isCoaching ? '켜짐' : '꺼짐'} · 교육 효과 측정: ${b.isTrialing ? '켜짐' : '꺼짐'} · 결재: ${b.isApproving ? '켜짐' : '꺼짐'})`]
+  const on = (x: boolean) => (x ? '켜짐' : '꺼짐')
+  const lines = [`에이전트 사무실 인사 기록 (업무 지시 인사 메모: ${on(b.isCoaching)} · 교육 효과 측정: ${on(b.isTrialing)} · 결재: ${on(b.isApproving)} · 조직 개편: ${on(b.isReorganizing)})`]
   if (b.employees.length === 0) lines.push('아직 직원이 없습니다. 서브에이전트가 일을 맡으면 부서에 배치됩니다.')
   for (const d of DEPTS) {
     const staffList = b.employees.filter(e => e.dept === d).sort((x, y) => y.xp - x.xp)
@@ -171,6 +182,10 @@ export function rosterText(b: HrBook, now: number): string {
       lines.push(`  ${e.nick} ${koNick(e.nick)} · ${rankOf(e.xp).ko} · 연봉 ${won(salaryOf(b, e))}만원 · 최근 평가 ${grade} · 완료 ${e.done} / 실패 ${e.failed} · 도구 오류 ${e.toolErrors}${e.reworks > 0 ? ` · 재작업 ${e.reworks}` : ''}${e.alarms > 0 ? ` · 근태 알림 ${e.alarms}` : ''}${e.rejections > 0 ? ` · 결재 반려 ${e.rejections}` : ''} · 경력 ${e.xp}`)
     }
   }
+  if (b.retired.length > 0) {
+    lines.push('', `떠난 직원(${b.retired.length}명${b.retired.length > 5 ? ', 최근 5명' : ''}):`)
+    for (const e of b.retired.slice(0, 5)) lines.push(`  ${e.nick} ${koNick(e.nick)} · ${DEPT_INFO[e.dept].ko} ${rankOf(e.xp).ko} · ${agoText(e.retiredAt, now)} · ${e.reason}`)
+  }
   const lessonLines = DEPTS.flatMap(d => (b.lessons[d] ?? []).slice(0, 3).map(l => {
     const tip = tipOf(l.pattern)
     return `  ${DEPT_INFO[d].ko}: ${l.tool} "${l.pattern}" ${l.count}회${tip === null ? '' : ` → ${tip}`}${effectText(b.trials[lessonKey(l)], isMuted(b, l, now))}`
@@ -181,6 +196,7 @@ export function rosterText(b: HrBook, now: number): string {
   }
   lines.push('', `평가: 완료 +10, 실패 -5(중단 -3), 도구 오류 1개당 -1(최대 -5), 오류 없이 완료 +3, 테스트·빌드 실패한 채 완료 -${CHECK_PENALTY}, 끝낸 뒤 BOSS가 같은 파일을 다시 고치면 재작업 -${REWORK_PENALTY}, 결재 반려 -${REJECT_PENALTY}.`,
     '직급: 사원 0 · 대리 20 · 과장 60 · 차장 120 · 부장 200(경력, 감점이면 깎여 강등). 평균 평가는 최근 일에 무게를 둡니다.',
+    '배정: 쉬고 있는 부서 직원 중 비슷한 일을 잘 끝낸 사람·평균 평가가 높은 사람에게 맡깁니다. 조직 개편: 계속 평가가 나쁘면 권고사직, 오래 일이 없으면 계약 종료(/office reorg on|off).',
     '한 사람의 인사카드는 /office hr <별칭>, 부서 실적 보고는 /office report [today|week].')
   return lines.join('\n')
 }

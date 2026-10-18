@@ -114,13 +114,13 @@ export function rejectNoteOf(e: Employee, route: Extract<Route, { kind: 'review'
 }
 
 /** 사용자에게 보일 결재 토스트 */
-export function decisionToast(e: Employee, route: Route, description: string, d: Decision | null): string {
+export function decisionToast(e: Employee, route: Route, description: string, d: Decision | null, penalty = REJECT_PENALTY): string {
   const what = `${e.nick} "${description}"`
   if (route.kind === 'exempt') return `결재: ${what} ${route.why}`
   if (d === null) return `결재: ${what} 보류(결재자가 답하지 못함)`
   return d.verdict === 'approved'
     ? `${route.approverTitle} 결재: ${what} 승인`
-    : `${route.approverTitle} 결재: ${what} 반려 -${REJECT_PENALTY}${d.notes[0] === undefined ? '' : ` · ${d.notes[0]}`}`
+    : `${route.approverTitle} 결재: ${what} 반려${penalty > 0 ? ` -${penalty}` : ' (감점 유예: 이 결재자의 반려가 자주 빗나감)'}${d.notes[0] === undefined ? '' : ` · ${d.notes[0]}`}`
 }
 
 // ── 계획 검토: 메인이 계획을 확정하면 기획팀장이 의견을 붙인다(막지 않는다) ─────

@@ -8,8 +8,8 @@ import { messageOf, oopsOf, orderOf, replyOf, selfTalkOf } from './speech'
 import { enroll, errorLessonKey, markHit } from './trial'
 import { activityOf, layoutOf } from './scene'
 import { answer, COMMAND } from './commands'
-import { awaitApproval, checkRework, EDIT_TOOLS, fileOf, isCheckCommand, papers, reviewPlan, syncStatus, takeNotes, watch } from './flow'
-import { admit, agentsOf, ensure, fresh, hrOf, MEET_MS, meet, nickOfId, patch, readFeed, save, saveHr, speak, staff, watchAgents } from './store'
+import { awaitApproval, checkFollowUp, checkRework, EDIT_TOOLS, fileOf, isCheckCommand, papers, reorganize, reviewPlan, syncStatus, takeNotes, watch } from './flow'
+import { admit, agentsOf, ensure, fresh, hold, hrOf, MEET_MS, meet, nickOfId, patch, readFeed, release, save, saveHr, speak, staff, watchAgents } from './store'
 import { cellsOf, dropOffice, feedRowsOf, FRAME_MS, markPaneShown, officeAt, RASTER, rowsOf, tick } from './view'
 
 const PANE = 'agent-office'
@@ -27,6 +27,8 @@ export const register: Register = (on, options) => {
     const started = await next(e)
     await $.command.register(COMMAND)
     $.clock.every(FRAME_MS, () => void tick($).catch(() => undefined))
+    // 오래 일이 없는 직원은 세션을 열 때 정리한다
+    await reorganize($).catch(() => undefined)
     return started
   })
 
@@ -39,38 +41,44 @@ export const register: Register = (on, options) => {
     return { text: `${opened.isPlaced ? '에이전트 사무실을 열었습니다.' : '에이전트 사무실이 아직 그려지지 않았습니다(창이 좁으면 넓혀 주세요).'}${lab} 인사 기록은 /office hr, 보고서는 /office report.` }
   })
 
-  // 새 에이전트: 부서 직원에게 맡기고(업무 지시 끝에 인사 메모), 띄운 쪽과 회의실에서 지시를 주고받은 뒤 일하러 간다
+  // 새 에이전트: 부서 적임자에게 맡기고(업무 지시 끝에 인사 메모), 띄운 쪽과 회의실에서 지시를 주고받은 뒤 일하러 간다
   on('agent.spawn', async ($, e, next) => {
-    const employee = await staff($, e.subagentType)
-    const at = await $.clock.now()
-    let brief: string | null = null
-    let trial: TrialTicket | undefined
-    if (e.workflow === undefined && (await hrOf($)).isCoaching) {
-      const lessons = lessonsFor(await hrOf($), employee.dept, at)
-      const keys = lessons.map(lessonKey)
-      let enrolled: ReturnType<typeof enroll> = null
-      await saveHr($, b => {
-        enrolled = enroll(b, keys)
-        return enrolled?.book ?? b
-      })
-      const arm = (enrolled as ReturnType<typeof enroll>)?.arm
-      if (arm !== undefined) trial = { arm, keys, hits: [] }
-      // 비교군은 실수 목록만 뺀다(나머지 메모는 같게 두어 실수 목록의 효과만 본다)
-      brief = briefOf(await hrOf($), employee, at, arm === 'control' ? [] : lessons)
+    const { employee, why } = await staff($, e.subagentType, e.description)
+    // 사무실에 들어올 때까지 붙잡아 둔다(그 사이 조직 개편이 고른 직원을 내보내지 않도록)
+    hold(employee.nick)
+    try {
+      const at = await $.clock.now()
+      let brief: string | null = null
+      let trial: TrialTicket | undefined
+      if (e.workflow === undefined && (await hrOf($)).isCoaching) {
+        const lessons = lessonsFor(await hrOf($), employee.dept, at)
+        const keys = lessons.map(lessonKey)
+        let enrolled: ReturnType<typeof enroll> = null
+        await saveHr($, b => {
+          enrolled = enroll(b, keys)
+          return enrolled?.book ?? b
+        })
+        const arm = (enrolled as ReturnType<typeof enroll>)?.arm
+        if (arm !== undefined) trial = { arm, keys, hits: [] }
+        // 비교군은 실수 목록만 뺀다(나머지 메모는 같게 두어 실수 목록의 효과만 본다)
+        brief = briefOf(await hrOf($), employee, at, arm === 'control' ? [] : lessons, why)
+      }
+      const spawned = await next(brief === null ? e : { ...e, prompt: `${e.prompt}\n\n${brief}` })
+      if (spawned.deny !== undefined || spawned.agentId === undefined) return spawned
+      const id = spawned.agentId
+      const parentId = e.parentAgentId ?? 'main'
+      const now = await $.clock.now()
+      await ensure($, parentId)
+      papers.set(id, { task: e.prompt.slice(0, 4000) })
+      // 회의실에서 지시하고("BEAR, go!") 받는다("yes!")
+      const order = orderOf(await nickOfId($, parentId), employee.nick, e.description, e.prompt, now, why)
+      await admit($, { ...fresh(id, e.subagentType, e.description, now), model: spawned.model, parentId, trial, say: replyOf('yes!', now) }, employee.nick,
+        list => patch(parentId, a => ({ ...a, say: order.bubble }))(meet([parentId, id], now + MEET_MS)(list)))
+      await speak($, null, null, order.line)
+      return spawned
+    } finally {
+      release(employee.nick)
     }
-    const spawned = await next(brief === null ? e : { ...e, prompt: `${e.prompt}\n\n${brief}` })
-    if (spawned.deny !== undefined || spawned.agentId === undefined) return spawned
-    const id = spawned.agentId
-    const parentId = e.parentAgentId ?? 'main'
-    const now = await $.clock.now()
-    await ensure($, parentId)
-    papers.set(id, { task: e.prompt.slice(0, 4000) })
-    // 회의실에서 지시하고("BEAR, go!") 받는다("yes!")
-    const order = orderOf(await nickOfId($, parentId), employee.nick, e.description, e.prompt, now)
-    await admit($, { ...fresh(id, e.subagentType, e.description, now), model: spawned.model, parentId, trial, say: replyOf('yes!', now) }, employee.nick,
-      list => patch(parentId, a => ({ ...a, say: order.bubble }))(meet([parentId, id], now + MEET_MS)(list)))
-    await speak($, null, null, order.line)
-    return spawned
   })
 
   on('turn.start', async ($, e, next) => {
@@ -141,6 +149,7 @@ export const register: Register = (on, options) => {
         files: file === null || id === 'main' || (a.files ?? []).includes(file) ? a.files : [...(a.files ?? []), file].slice(-50),
         }
       }))
+      if (file !== null) await checkFollowUp($, file, me)
       if (file !== null && id === 'main') await checkRework($, file)
       // 서브에이전트의 오류는 부서의 교훈으로 남긴다
       const who = (await agentsOf($)).find(a => a.id === id)

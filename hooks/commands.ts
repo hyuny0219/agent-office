@@ -4,13 +4,14 @@ import type { EngineInterface } from 'claude-code'
 import { APPROVER_MODEL, REJECT_PENALTY } from './approval'
 import { cardOf, findEmployee, reportOf, rosterText } from './report'
 import type { Period } from './report'
+import { IDLE_JOBS, IDLE_MS, RETIRE_AVG, RETIRE_JOBS } from './org'
 import { CONTROL_EVERY } from './trial'
 import { hrOf, saveHr } from './store'
 
 export const COMMAND = {
   name: 'office',
-  description: '에이전트 사무실 평면도 보기. approval on|off: 보고·계획 결재 켜고 끄기, report [today|week]: 일간·주간 보고, hr: 인사 기록(부서·직급·연봉·평가), hr <별칭>: 인사카드, hr on|off: 업무 지시 인사 메모 켜고 끄기, hr ab on|off: 교육 효과 측정(비교군) 켜고 끄기',
-  argumentHint: '[approval on|off | report [today|week] | hr [<별칭>|on|off|ab on|off]]',
+  description: '에이전트 사무실 평면도 보기. approval on|off: 보고·계획 결재 켜고 끄기, reorg on|off: 조직 개편(권고사직·계약 종료) 켜고 끄기, report [today|week]: 일간·주간 보고, hr: 인사 기록(부서·직급·연봉·평가), hr <별칭>: 인사카드, hr on|off: 업무 지시 인사 메모 켜고 끄기, hr ab on|off: 교육 효과 측정(비교군) 켜고 끄기',
+  argumentHint: '[approval on|off | reorg on|off | report [today|week] | hr [<별칭>|on|off|ab on|off]]',
 }
 
 /** 글로 답할 하위 명령이면 그 답, 패널을 열 명령이면 null */
@@ -22,6 +23,13 @@ export async function answer($: EngineInterface, args: string): Promise<string |
     return arg === 'on'
       ? `끝낸 일의 보고를 팀장이 결재하고(과장 이상·짧은 일은 전결, 반려 -${REJECT_PENALTY}), 확정한 계획은 기획팀장이 검토합니다. 결재마다 ${APPROVER_MODEL}를 한 번 부릅니다.`
       : '결재를 멈춥니다. 보고와 계획은 결재 없이 넘어갑니다.'
+  }
+  if (sub === 'reorg') {
+    if (arg !== 'on' && arg !== 'off') return `조직 개편: ${(await hrOf($)).isReorganizing ? '켜짐' : '꺼짐'}. 쓰는 법: /office reorg on|off`
+    await saveHr($, b => ({ ...b, isReorganizing: arg === 'on' }))
+    return arg === 'on'
+      ? `조직 개편을 합니다: 업무 ${RETIRE_JOBS}건 이상에 최근 평균 평가가 ${RETIRE_AVG} 아래면 권고사직, 업무 ${IDLE_JOBS}건 이하로 ${IDLE_MS / (24 * 60 * 60_000)}일 넘게 일이 없으면 계약 종료. 떠난 직원의 인사카드는 남습니다.`
+      : '조직 개편을 멈춥니다. 직원을 내보내지 않습니다.'
   }
   if (sub === 'report') {
     const want = arg?.toLowerCase()

@@ -5,6 +5,8 @@ import type { EngineInterface } from 'claude-code'
 
 import type { Bubble, HrBook, OfficeAgent, Utterance } from '../types'
 import { assign, DEPTS, deptOf, emptyBook, hire, leadOf, migrate } from './hr'
+import { pickFor } from './org'
+import type { Assignment } from './org'
 import { pushLine } from './speech'
 import { nickFor } from './scene'
 import type { Leads } from './scene'
@@ -40,9 +42,23 @@ export async function saveHr($: EngineInterface, fn: (b: HrBook) => HrBook) {
 
 export const leadsOf = (b: HrBook): Leads => Object.fromEntries(DEPTS.map(d => [d, leadOf(b, d)?.nick]).filter(([, n]) => n !== undefined))
 
-/** 직원 명부와 사무실 사람들의 별칭을 모두 피해 새 별칭을 정한다 */
+/** 직원 명부·떠난 직원·사무실 사람들의 별칭을 모두 피해 새 별칭을 정한다(떠난 직원의 별칭을 다시 쓰면 기록이 섞인다) */
 const newNick = (type: string, agents: readonly OfficeAgent[], b: HrBook) =>
-  nickFor(type, [...agents, ...b.employees.map(e => ({ nick: e.nick, endedAt: 0 }))])
+  nickFor(type, [...agents, ...[...b.employees, ...b.retired, ...b.log].map(e => ({ nick: e.nick, endedAt: 0 }))])
+
+/**
+ * 조직 개편이 건드리면 안 되는 직원(별칭 → 겹친 수): 배정됐는데 아직 사무실에 안 들어온 사람,
+ * 일은 끝났지만 평가·결재가 덜 끝난 사람. 일하는 중인 사람은 busyOf가 본다
+ */
+const holds = new Map<string, number>()
+export const hold = (nick: string) => {
+  holds.set(nick, (holds.get(nick) ?? 0) + 1)
+}
+export const release = (nick: string) => {
+  const n = (holds.get(nick) ?? 0) - 1
+  if (n <= 0) holds.delete(nick)
+  else holds.set(nick, n)
+}
 
 /** 그리는 쪽이 사무실 사람들과 메신저를 구독한다(상태가 바뀌면 다시 그린다) */
 export async function watchAgents($: EngineInterface) {
@@ -96,6 +112,8 @@ export async function nickOfId($: EngineInterface, id: string): Promise<string> 
 
 /** 지금 일하는 사람들의 별칭 */
 export const busyOf = (agents: readonly OfficeAgent[]): Set<string> => new Set(agents.filter(a => a.endedAt === null).map(a => a.nick))
+/** 조직 개편이 건드리면 안 되는 별칭: 지금(이 순간의 사본) 일하는 사람과 붙잡아 둔 사람. agentsOf로 사본을 채운 뒤에 부른다 */
+export const keptNow = (): Set<string> => new Set([...busyOf(cache ?? []), ...holds.keys()])
 
 export const fresh = (id: string, type: string, description: string, now: number): Omit<OfficeAgent, 'nick'> => ({
   id, type, description, model: null, startedAt: now, endedAt: null, activity: type === 'main' ? 'idle' : 'think', tool: null, tools: 0,
@@ -103,23 +121,26 @@ export const fresh = (id: string, type: string, description: string, now: number
 })
 
 /**
- * 일을 맡을 직원을 정한다: 그 부서에서 쉬고 있는 직원 중 경력이 가장 높은 사람, 없으면 새로 뽑는다.
- * 정한 직원은 인사 기록에 남는다.
+ * 일을 맡을 직원을 정한다: 업무 설명이 있으면 그 부서에서 쉬고 있는 직원 중 적임자(비슷한 일의 실적·평균 평가),
+ * 없으면 경력이 가장 높은 사람. 아무도 없으면 새로 뽑는다. 정한 직원은 인사 기록에 남는다.
  */
-export async function staff($: EngineInterface, type: string) {
+export async function staff($: EngineInterface, type: string, description = ''): Promise<Assignment> {
   const b = await hrOf($)
   const dept = deptOf(type)
   const agents = await agentsOf($)
-  const had = assign(b, dept, busyOf(agents))
-  if (had !== undefined) return had
+  const busy = busyOf(agents)
+  const picked = description.trim() === '' ? null : pickFor(b, dept, busy, description)
+  if (picked !== null) return picked
+  const had = assign(b, dept, busy)
+  if (had !== undefined) return { employee: had, why: null }
   const hired = hire(b, newNick(type, agents, b), dept, type, await $.clock.now())
   await saveHr($, () => hired.book)
-  return hired.employee
+  return { employee: hired.employee, why: null }
 }
 
 /** 사무실에 들인다(별칭이 정해져 있으면 그대로, 같은 id가 있으면 바꾼다) */
 export async function admit($: EngineInterface, agent: Omit<OfficeAgent, 'nick'>, nick?: string, extra: (list: OfficeAgent[]) => OfficeAgent[] = l => l) {
-  const chosen = nick ?? (agent.type === 'main' ? 'BOSS' : (await staff($, agent.type)).nick)
+  const chosen = nick ?? (agent.type === 'main' ? 'BOSS' : (await staff($, agent.type)).employee.nick)
   await save($, list => extra([...list.filter(a => a.id !== agent.id), { ...agent, nick: chosen }]))
 }
 

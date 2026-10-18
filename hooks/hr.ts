@@ -1,7 +1,7 @@
 // 인사 제도. 에이전트 종류로 부서를 정하고, 같은 부서 직원(별칭)이 일을 맡을 때마다 경력이 쌓인다.
 // 평가는 실제 기록(완료·실패·도구 오류·거절)으로만 매기고, 부서가 반복한 실수는 "교훈"으로 모아
 // 다음에 그 부서 직원이 일을 맡을 때 업무 지시 끝에 짧은 인사 메모로 붙인다. 순수 함수만 둔다.
-import type { Approval, Dept, Employee, Handoff, HrBook, JobRecord, Lesson } from '../types'
+import type { Approval, Dept, Employee, Handoff, HrBook, JobRecord, Lesson, Retiree } from '../types'
 
 export const DEPTS: Dept[] = ['dev', 'research', 'qa', 'plan', 'docs', 'ops']
 
@@ -80,7 +80,7 @@ export const scoreOf = (r: JobResult): number => {
 
 export const gradeOf = (score: number): string => (score >= 13 ? 'S' : score >= 10 ? 'A' : score >= 6 ? 'B' : score >= 0 ? 'C' : 'D')
 
-export const emptyBook = (): HrBook => ({ version: 2, employees: [], lessons: {}, handoffs: [], isCoaching: true, isTrialing: true, trialSeq: 0, trials: {}, log: [], isApproving: true, isApprovalNoticed: false })
+export const emptyBook = (): HrBook => ({ version: 2, employees: [], lessons: {}, handoffs: [], isCoaching: true, isTrialing: true, trialSeq: 0, trials: {}, log: [], isApproving: true, isApprovalNoticed: false, isReorganizing: true, isReorgNoticed: false, retired: [] })
 
 /**
  * 저장된 인사 기록을 지금 형식으로 옮긴다. 예전 판(version 1)이나 모르는 판이라도 직원 명부가 있으면
@@ -93,15 +93,19 @@ export function migrate(stored: unknown): HrBook | null {
   const num = (x: unknown, or: number): number => (typeof x === 'number' && Number.isFinite(x) ? x : or)
   const numOrNull = (x: unknown): number | null => (typeof x === 'number' && Number.isFinite(x) ? x : null)
   const isDept = (x: unknown): x is Dept => DEPTS.includes(x as Dept)
-  const employees = (v.employees as Record<string, unknown>[])
-    .filter(e => typeof e === 'object' && e !== null && typeof e.nick === 'string')
-    .map((e): Employee => ({
-      // 더 새로운 판이 둔 칸은 그대로 남긴다
-      ...(e as object),
-      nick: e.nick as string, dept: isDept(e.dept) ? e.dept : 'ops', type: typeof e.type === 'string' ? e.type : 'agent',
-      xp: num(e.xp, 0), jobs: num(e.jobs, 0), done: num(e.done, 0), failed: num(e.failed, 0), toolErrors: num(e.toolErrors, 0),
-      reworks: num(e.reworks, 0), alarms: num(e.alarms, 0), rejections: num(e.rejections, 0), avgScore: numOrNull(e.avgScore), lastScore: numOrNull(e.lastScore), hiredAt: num(e.hiredAt, 0), lastAt: numOrNull(e.lastAt),
-    }))
+  const employeeOf = (e: Record<string, unknown>): Employee => ({
+    // 더 새로운 판이 둔 칸은 그대로 남긴다
+    ...(e as object),
+    nick: e.nick as string, dept: isDept(e.dept) ? e.dept : 'ops', type: typeof e.type === 'string' ? e.type : 'agent',
+    xp: num(e.xp, 0), jobs: num(e.jobs, 0), done: num(e.done, 0), failed: num(e.failed, 0), toolErrors: num(e.toolErrors, 0),
+    reworks: num(e.reworks, 0), alarms: num(e.alarms, 0), rejections: num(e.rejections, 0), avgScore: numOrNull(e.avgScore), lastScore: numOrNull(e.lastScore), hiredAt: num(e.hiredAt, 0), lastAt: numOrNull(e.lastAt),
+  })
+  const isNamed = (e: unknown): e is Record<string, unknown> => typeof e === 'object' && e !== null && typeof (e as { nick?: unknown }).nick === 'string'
+  const employees = (v.employees as unknown[]).filter(isNamed).map(employeeOf)
+  const retired = (Array.isArray(v.retired) ? v.retired as unknown[] : []).filter(isNamed)
+    .filter(e => typeof e.retiredAt === 'number' && Number.isFinite(e.retiredAt))
+    .map((e): Retiree => ({ ...employeeOf(e), retiredAt: e.retiredAt as number, reason: typeof e.reason === 'string' ? e.reason : '' }))
+    .slice(0, MAX_RETIRED)
   const rawLessons = typeof v.lessons === 'object' && v.lessons !== null ? v.lessons as Record<string, unknown> : {}
   const lessons: HrBook['lessons'] = {}
   for (const d of DEPTS) {
@@ -127,15 +131,17 @@ export function migrate(stored: unknown): HrBook | null {
     typeof x?.nick === 'string' && isNum(x.job) && isNum(x.startedAt) && isNum(x.endedAt) && isNum(x.score)
     && (x.outcome === 'done' || x.outcome === 'failed' || x.outcome === 'killed'))
     .map(x => {
-      const { salary, approval, ...rest } = x
+      const { salary, approval, approver, files, isFollowedUp, isWaived, ...rest } = x
       const isApproval = approval === 'approved' || approval === 'rejected' || approval === 'exempt'
       return { ...rest, ...(isApproval ? { approval } : {}), dept: isDept(x.dept) ? x.dept : 'ops', description: typeof x.description === 'string' ? x.description : '', errors: num(x.errors, 0),
-        isCheckFailed: x.isCheckFailed === true, isReworked: x.isReworked === true, alarms: num(x.alarms, 0), ...(isNum(salary) ? { salary } : {}) }
+        isCheckFailed: x.isCheckFailed === true, isReworked: x.isReworked === true, alarms: num(x.alarms, 0), ...(isNum(salary) ? { salary } : {}),
+        ...(typeof approver === 'string' ? { approver } : {}), ...(isNum(files) ? { files } : {}), ...(isFollowedUp === true ? { isFollowedUp } : {}), ...(isWaived === true ? { isWaived } : {}) }
     })
     .slice(0, MAX_LOG)
   return {
-    ...v, version: 2, employees, lessons, handoffs, trials, log,
+    ...v, version: 2, employees, lessons, handoffs, trials, log, retired,
     isCoaching: v.isCoaching !== false, isTrialing: v.isTrialing !== false, isApproving: v.isApproving !== false, isApprovalNoticed: v.isApprovalNoticed === true, trialSeq: num(v.trialSeq, 0),
+    isReorganizing: v.isReorganizing !== false, isReorgNoticed: v.isReorgNoticed === true,
   }
 }
 
@@ -173,6 +179,8 @@ export function review(book: HrBook, nick: string, r: JobResult, now: number): M
 
 /** 끝낸 일 기록은 최근 것 300건까지 */
 export const MAX_LOG = 300
+/** 떠난 직원은 최근 50명까지 */
+export const MAX_RETIRED = 50
 
 /** 끝낸 일 한 건을 기록한다(보고서·인사카드가 읽는다) */
 export const record = (book: HrBook, r: JobRecord): HrBook => ({ ...book, log: [r, ...book.log].slice(0, MAX_LOG) })
@@ -221,12 +229,14 @@ function dock(book: HrBook, nick: string, job: number, amount: number, mark: (e:
   return { ...moved, book: { ...moved.book, log } }
 }
 
-/** 결재 결과를 그 일의 기록에 적고, 반려면 깎는다 */
-export function decide(book: HrBook, nick: string, job: number, approval: Approval, penalty: number): Moved {
+/** 결재 결과(와 결재자)를 그 일의 기록에 적고, 반려면 깎는다(감점 0이면 유예한 반려로 적는다) */
+export function decide(book: HrBook, nick: string, job: number, approval: Approval, penalty: number, approver?: string): Moved {
+  const isWaived = approval === 'rejected' && penalty === 0
+  const mark = (r: JobRecord): JobRecord => ({ ...r, approval, ...(approver === undefined ? {} : { approver }), ...(isWaived ? { isWaived } : {}) })
   if (approval !== 'rejected') {
-    return { book: { ...book, log: book.log.map(r => (r.nick === nick && r.job === job ? { ...r, approval } : r)) }, promotedTo: null, demotedTo: null }
+    return { book: { ...book, log: book.log.map(r => (r.nick === nick && r.job === job ? mark(r) : r)) }, promotedTo: null, demotedTo: null }
   }
-  return dock(book, nick, job, penalty, e => ({ ...e, rejections: e.rejections + 1 }), r => ({ ...r, approval }))
+  return dock(book, nick, job, penalty, e => ({ ...e, rejections: e.rejections + 1 }), mark)
 }
 
 /**
@@ -315,7 +325,7 @@ export const lessonsFor = (book: HrBook, dept: Dept, now?: number): Lesson[] =>
  * 업무 지시 끝에 붙일 인사 메모(짧게). 코칭이 꺼져 있으면 null.
  * lessons를 주면 그 실수를 붙이고(비교군이면 빈 목록), 안 주면 lessonsFor로 고른다.
  */
-export function briefOf(book: HrBook, e: Employee, now?: number, lessons: readonly Lesson[] = lessonsFor(book, e.dept, now)): string | null {
+export function briefOf(book: HrBook, e: Employee, now?: number, lessons: readonly Lesson[] = lessonsFor(book, e.dept, now), why: string | null = null): string | null {
   if (!book.isCoaching) return null
   const dept = DEPT_INFO[e.dept]
   const lead = leadOf(book, e.dept)
@@ -323,7 +333,8 @@ export function briefOf(book: HrBook, e: Employee, now?: number, lessons: readon
   const lines = [
     '[사내 인사 메모 · agent-office]',
     `담당: ${dept.ko} ${e.nick} ${rank}${lead !== undefined && lead.nick !== e.nick ? ` (팀장 ${lead.nick} ${rankOf(lead.xp).ko})` : lead?.nick === e.nick ? ' · 팀장' : ''}.` +
-      (e.jobs > 0 ? ` 지난 기록: 완료 ${e.done} · 실패 ${e.failed} · 도구 오류 ${e.toolErrors}${e.reworks > 0 ? ` · 재작업 ${e.reworks}` : ''}${e.alarms > 0 ? ` · 근태 알림 ${e.alarms}` : ''}, 최근 평가 ${gradeOf(e.lastScore ?? 0)}.` : ' 첫 업무입니다.'),
+      (e.jobs > 0 ? ` 지난 기록: 완료 ${e.done} · 실패 ${e.failed} · 도구 오류 ${e.toolErrors}${e.reworks > 0 ? ` · 재작업 ${e.reworks}` : ''}${e.alarms > 0 ? ` · 근태 알림 ${e.alarms}` : ''}, 최근 평가 ${gradeOf(e.lastScore ?? 0)}.` : ' 첫 업무입니다.') +
+      (why === null ? '' : ` 배정 사유: ${why}.`),
   ]
   if (lessons.length > 0) {
     lines.push(`${dept.ko}이 최근 반복한 실수입니다. 이번에는 피하세요:`)
