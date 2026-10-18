@@ -49,6 +49,7 @@ const flawsOf = (r: JobRecord): string[] => [
   ...(r.isCheckFailed ? ['테스트·빌드 실패한 채 완료'] : []),
   ...(r.isReworked ? ['재작업'] : []),
   ...(r.alarms > 0 ? [`근태 알림 ${r.alarms}`] : []),
+  ...(r.approval === 'rejected' ? ['결재 반려'] : []),
 ]
 
 /** 그 일의 인건비(원): 그때 연봉(예전 기록이면 지금 연봉)을 시급으로 환산해 걸린 시간을 곱한다 */
@@ -86,7 +87,7 @@ export function reportOf(book: HrBook, period: Period, now: number): string {
     const mine = list.filter(r => r.dept === d)
     if (mine.length === 0) continue
     const sum = (f: (r: JobRecord) => number) => mine.reduce((s, r) => s + f(r), 0)
-    const counts: [string, number][] = [['재작업', sum(r => (r.isReworked ? 1 : 0))], ['테스트 실패 완료', sum(r => (r.isCheckFailed ? 1 : 0))], ['근태 알림', sum(r => r.alarms)]]
+    const counts: [string, number][] = [['재작업', sum(r => (r.isReworked ? 1 : 0))], ['테스트 실패 완료', sum(r => (r.isCheckFailed ? 1 : 0))], ['근태 알림', sum(r => r.alarms)], ['결재 반려', sum(r => (r.approval === 'rejected' ? 1 : 0))]]
     const extra = [`도구 오류 ${sum(r => r.errors)}`, ...counts.filter(([, n]) => n > 0).map(([k, n]) => `${k} ${n}`)]
     lines.push(`  ${DEPT_INFO[d].ko}: ${tally(mine)} · ${extra.join(' · ')}`)
   }
@@ -132,7 +133,7 @@ export function cardOf(book: HrBook, e: Employee, now: number): string {
   }
   lines.push(
     `업무 ${e.jobs}건 · 완료 ${e.done} / 실패 ${e.failed}(완료율 ${pctOf(e.done, e.jobs)}%) · 평균 평가 ${gradeText(e.avgScore)} · 최근 평가 ${e.lastScore === null ? '-' : gradeOf(e.lastScore)}`,
-    `도구 오류 ${e.toolErrors} · 재작업 ${e.reworks} · 근태 알림 ${e.alarms}`,
+    `도구 오류 ${e.toolErrors} · 재작업 ${e.reworks} · 근태 알림 ${e.alarms} · 결재 반려 ${e.rejections}`,
     `입사 ${agoText(e.hiredAt, now)}${e.lastAt === null ? '' : ` · 마지막 업무 ${agoText(e.lastAt, now)}`}`,
   )
   const recent = book.log.filter(r => r.nick === e.nick).slice(0, 5)

@@ -1,7 +1,7 @@
 // 인사 제도. 에이전트 종류로 부서를 정하고, 같은 부서 직원(별칭)이 일을 맡을 때마다 경력이 쌓인다.
 // 평가는 실제 기록(완료·실패·도구 오류·거절)으로만 매기고, 부서가 반복한 실수는 "교훈"으로 모아
 // 다음에 그 부서 직원이 일을 맡을 때 업무 지시 끝에 짧은 인사 메모로 붙인다. 순수 함수만 둔다.
-import type { Dept, Employee, Handoff, HrBook, JobRecord, Lesson } from '../types'
+import type { Approval, Dept, Employee, Handoff, HrBook, JobRecord, Lesson } from '../types'
 
 export const DEPTS: Dept[] = ['dev', 'research', 'qa', 'plan', 'docs', 'ops']
 
@@ -80,7 +80,7 @@ export const scoreOf = (r: JobResult): number => {
 
 export const gradeOf = (score: number): string => (score >= 13 ? 'S' : score >= 10 ? 'A' : score >= 6 ? 'B' : score >= 0 ? 'C' : 'D')
 
-export const emptyBook = (): HrBook => ({ version: 2, employees: [], lessons: {}, handoffs: [], isCoaching: true, isTrialing: true, trialSeq: 0, trials: {}, log: [] })
+export const emptyBook = (): HrBook => ({ version: 2, employees: [], lessons: {}, handoffs: [], isCoaching: true, isTrialing: true, trialSeq: 0, trials: {}, log: [], isApproving: true, isApprovalNoticed: false })
 
 /**
  * 저장된 인사 기록을 지금 형식으로 옮긴다. 예전 판(version 1)이나 모르는 판이라도 직원 명부가 있으면
@@ -100,7 +100,7 @@ export function migrate(stored: unknown): HrBook | null {
       ...(e as object),
       nick: e.nick as string, dept: isDept(e.dept) ? e.dept : 'ops', type: typeof e.type === 'string' ? e.type : 'agent',
       xp: num(e.xp, 0), jobs: num(e.jobs, 0), done: num(e.done, 0), failed: num(e.failed, 0), toolErrors: num(e.toolErrors, 0),
-      reworks: num(e.reworks, 0), alarms: num(e.alarms, 0), avgScore: numOrNull(e.avgScore), lastScore: numOrNull(e.lastScore), hiredAt: num(e.hiredAt, 0), lastAt: numOrNull(e.lastAt),
+      reworks: num(e.reworks, 0), alarms: num(e.alarms, 0), rejections: num(e.rejections, 0), avgScore: numOrNull(e.avgScore), lastScore: numOrNull(e.lastScore), hiredAt: num(e.hiredAt, 0), lastAt: numOrNull(e.lastAt),
     }))
   const rawLessons = typeof v.lessons === 'object' && v.lessons !== null ? v.lessons as Record<string, unknown> : {}
   const lessons: HrBook['lessons'] = {}
@@ -127,14 +127,15 @@ export function migrate(stored: unknown): HrBook | null {
     typeof x?.nick === 'string' && isNum(x.job) && isNum(x.startedAt) && isNum(x.endedAt) && isNum(x.score)
     && (x.outcome === 'done' || x.outcome === 'failed' || x.outcome === 'killed'))
     .map(x => {
-      const { salary, ...rest } = x
-      return { ...rest, dept: isDept(x.dept) ? x.dept : 'ops', description: typeof x.description === 'string' ? x.description : '', errors: num(x.errors, 0),
+      const { salary, approval, ...rest } = x
+      const isApproval = approval === 'approved' || approval === 'rejected' || approval === 'exempt'
+      return { ...rest, ...(isApproval ? { approval } : {}), dept: isDept(x.dept) ? x.dept : 'ops', description: typeof x.description === 'string' ? x.description : '', errors: num(x.errors, 0),
         isCheckFailed: x.isCheckFailed === true, isReworked: x.isReworked === true, alarms: num(x.alarms, 0), ...(isNum(salary) ? { salary } : {}) }
     })
     .slice(0, MAX_LOG)
   return {
     ...v, version: 2, employees, lessons, handoffs, trials, log,
-    isCoaching: v.isCoaching !== false, isTrialing: v.isTrialing !== false, trialSeq: num(v.trialSeq, 0),
+    isCoaching: v.isCoaching !== false, isTrialing: v.isTrialing !== false, isApproving: v.isApproving !== false, isApprovalNoticed: v.isApprovalNoticed === true, trialSeq: num(v.trialSeq, 0),
   }
 }
 
@@ -197,19 +198,35 @@ export function rework(book: HrBook, file: string, now: number): Moved & { nick:
   const kept = { ...book, handoffs: live.filter(h => h !== hit) }
   if (hit === undefined) return { book: kept, promotedTo: null, demotedTo: null, nick: null }
   if (!kept.employees.some(e => e.nick === hit.nick)) return { book: kept, promotedTo: null, demotedTo: null, nick: null }
-  const moved = adjust(kept, hit.nick, e => {
+  const moved = dock(kept, hit.nick, hit.job, REWORK_PENALTY, e => ({ ...e, reworks: e.reworks + 1 }), r => ({ ...r, isReworked: true }))
+  return { ...moved, nick: hit.nick }
+}
+
+/**
+ * 끝낸 일 한 건(그 직원의 job번째 일)의 평가를 나중에 깎는다: 경력, 그 일이 마지막이면 최근 평가,
+ * 평균 속 그 일의 몫, 그 일의 기록. mark·markLog로 횟수와 기록 표시를 더한다.
+ */
+function dock(book: HrBook, nick: string, job: number, amount: number, mark: (e: Employee) => Employee, markLog: (r: JobRecord) => JobRecord): Moved {
+  const moved = adjust(book, nick, e => {
     // 그 일 뒤에 일을 더 했으면 그만큼 평균 속 그 일의 무게가 줄었다
-    const later = Math.max(0, e.jobs - hit.job)
+    const later = Math.max(0, e.jobs - job)
     const isLatest = later === 0
-    return {
-      ...e, xp: Math.max(0, e.xp - REWORK_PENALTY), reworks: e.reworks + 1,
-      lastScore: isLatest && e.lastScore !== null ? e.lastScore - REWORK_PENALTY : e.lastScore,
-      avgScore: e.avgScore === null ? null : e.avgScore - REWORK_PENALTY * EWMA * (1 - EWMA) ** later,
-    }
+    return mark({
+      ...e, xp: Math.max(0, e.xp - amount),
+      lastScore: isLatest && e.lastScore !== null ? e.lastScore - amount : e.lastScore,
+      avgScore: e.avgScore === null ? null : e.avgScore - amount * EWMA * (1 - EWMA) ** later,
+    })
   })
-  // 그 일의 기록에도 재작업을 적는다
-  const log = moved.book.log.map(r => (r.nick === hit.nick && r.job === hit.job ? { ...r, isReworked: true, score: r.score - REWORK_PENALTY } : r))
-  return { ...moved, book: { ...moved.book, log }, nick: hit.nick }
+  const log = moved.book.log.map(r => (r.nick === nick && r.job === job ? markLog({ ...r, score: r.score - amount }) : r))
+  return { ...moved, book: { ...moved.book, log } }
+}
+
+/** 결재 결과를 그 일의 기록에 적고, 반려면 깎는다 */
+export function decide(book: HrBook, nick: string, job: number, approval: Approval, penalty: number): Moved {
+  if (approval !== 'rejected') {
+    return { book: { ...book, log: book.log.map(r => (r.nick === nick && r.job === job ? { ...r, approval } : r)) }, promotedTo: null, demotedTo: null }
+  }
+  return dock(book, nick, job, penalty, e => ({ ...e, rejections: e.rejections + 1 }), r => ({ ...r, approval }))
 }
 
 /**
@@ -221,7 +238,7 @@ export function assign(book: HrBook, dept: Dept, busy: ReadonlySet<string>): Emp
 }
 
 export function hire(book: HrBook, nick: string, dept: Dept, type: string, now: number): { book: HrBook; employee: Employee } {
-  const employee: Employee = { nick, dept, type, xp: 0, jobs: 0, done: 0, failed: 0, toolErrors: 0, reworks: 0, alarms: 0, avgScore: null, lastScore: null, hiredAt: now, lastAt: null }
+  const employee: Employee = { nick, dept, type, xp: 0, jobs: 0, done: 0, failed: 0, toolErrors: 0, reworks: 0, alarms: 0, rejections: 0, avgScore: null, lastScore: null, hiredAt: now, lastAt: null }
   return { book: { ...book, employees: [...book.employees, employee] }, employee }
 }
 

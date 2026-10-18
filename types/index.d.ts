@@ -43,7 +43,17 @@ export type OfficeAgent = {
   trial?: TrialTicket
   /** 이번 일에서 받은 근태 알림 수 */
   alarms?: number
+  /** 머리 위 말풍선(잠깐 뜬다) */
+  say?: Bubble
 }
+
+/** 평면도 머리 위 말풍선: 영문 짧은 말, 그 말을 한 때, 말투(혼잣말·대화·실수·좋은 소식) */
+export type Bubble = { text: string; at: number; tone: 'self' | 'talk' | 'bad' | 'good' }
+
+export type UtteranceKind = 'order' | 'report' | 'message' | 'self' | 'error' | 'approval'
+
+/** 사내 메신저 한 줄 */
+export type Utterance = { at: number; kind: UtteranceKind; from: string; to?: string; text: string }
 
 /** 같은 것이 연달아 몇 번 났는지 */
 export type Streak = { key: string; count: number }
@@ -65,6 +75,8 @@ export type Employee = {
   reworks: number
   /** 근태 알림(같은 실수 연발·제자리걸음)을 받은 횟수 */
   alarms: number
+  /** 결재에서 반려된 횟수 */
+  rejections: number
   /** 최근 평가 가중 평균(최근 일이 30%) */
   avgScore: number | null
   lastScore: number | null
@@ -125,7 +137,12 @@ export type JobRecord = {
   alarms: number
   /** 그때 연봉(만원, 인건비 계산용). 예전 기록에는 없다 */
   salary?: number
+  /** 결재 결과(결재 전이거나 보류면 없다) */
+  approval?: Approval
 }
+
+/** 승인·반려·전결 */
+export type Approval = 'approved' | 'rejected' | 'exempt'
 
 export type HrBook = {
   version: 2
@@ -142,12 +159,18 @@ export type HrBook = {
   trials: Record<string, TrialStats>
   /** 끝낸 일 기록(최근 것부터) */
   log: JobRecord[]
+  /** 끝낸 일의 보고·확정한 계획을 결재에 올릴지(/office approval on|off) */
+  isApproving: boolean
+  /** 결재를 처음 부를 때 비용 안내를 했는지 */
+  isApprovalNoticed: boolean
 }
 
 declare module 'claude-code' {
   interface PluginState {
     'agent-office': {
       agents: OfficeAgent[]
+      /** 사내 메신저(최근 줄이 뒤) */
+      feed: Utterance[]
     }
   }
 }

@@ -38,6 +38,7 @@ In the desktop app, where `/plugin` does not run: click + next to the prompt box
 | `/office` | Open the office floor plan pane |
 | `/office hr` | HR records: staff, rank, salary, latest review, done/failed, tool errors, reworks and attendance alerts by department, plus each department's repeated mistakes |
 | `/office hr <nick>` | One employee's personnel card: rank and experience to the next rank, salary breakdown, record, last 5 jobs, the department's repeated mistakes (`bear` or the Korean name both work) |
+| `/office approval on` / `off` | Turn approvals on or off (on by default): team leads sign off finished jobs' reports, and the planning lead reviews confirmed plans |
 | `/office report [today\|week]` | Daily (last 24 hours, the default) or weekly (last 7 days) report: totals and per-department results, hours worked and labor cost, MVP, and jobs to look at (failed, finished with failing tests, reworked, attendance alerts) |
 | `/office hr on` / `off` | Turn the HR memo in task briefs and the attendance notices on or off (on by default) |
 | `/office hr ab on` / `off` | Turn training-effect measurement (a control group that gets no mistake list) on or off (on by default) |
@@ -54,6 +55,16 @@ The floor plan is drawn in pixels in the terminal (72 to 140 columns wide, 27 ro
   - Waiting (idle) → pantry, sofa or restroom
   - Done → report, then leave through the entrance
 - New agents walk in from the entrance and walk the corridor when they change rooms. The main conversation is `BOSS`; subagents get animal nicknames (OWL, BEAR, HAWK, …).
+
+### Office chatter
+
+- **Speech bubbles**: a short line pops up above a head for about 3.5 seconds. The floor plan can only draw ASCII, so bubbles are in English.
+  - Muttering (gray): `edit hr.ts`, `$ npm test`, `grep foo`
+  - Talk (black): a briefing `BEAR, go!` → `yes!`, a message `-> OWL`, receiving a report `thanks!`
+  - Reports (green) `done!`, mistakes (red) `oops!`
+- **Office messenger**: the last 5 lines appear below the floor plan, in Korean: briefings (지시), reports (보고), messages (메시지), muttering from a Bash command's description (혼잣말), failed tools, and approvals (결재).
+- Control characters are stripped from the messenger and bubbles, and values that look like tokens, keys or passwords are masked as `***`. Bash bubbles carry only the command name. The messenger is session state (`agent-office.feed`), so other mods in the same session can read it.
+- The full task and report text used for approvals is kept inside the mod, not in pane state. After the mod reloads, jobs that started before the reload look like they ended without a report, and their approval is held.
 
 ## HR system
 
@@ -94,6 +105,16 @@ Review criteria: finish the task, keep tool errors down, don't finish with a fai
 The repeated mistakes are subagents' tool error messages, grouped and counted by department (paths and numbers removed). Only those seen at least twice are added, most recent first, three at most. Mistakes not seen again for two weeks are left out.
 Turn it off with `/office hr off`. Reviews and salaries keep being recorded either way.
 
+
+### Approvals
+
+No tool call is ever blocked. What goes up for approval is **the report of a finished job** and **a confirmed plan**.
+
+- **Report approval**: when a subagent finishes, its department's team lead reads the task, the report and the record (tool errors, failing tests or builds, attendance alerts) and approves or rejects it. If the employee is the lead, or there is no lead, the boss (BOSS) signs off.
+- **Delegated sign-off**: reports from 과장 (manager) rank and above, and short jobs with fewer than 3 tool calls, go through without review.
+- **Rejection**: what to fix shows as a toast, and the main loop reads it along with the report (for a background job, after its next tool result). The main loop decides whether to hand the job back. A rejection costs that job -3 and shows on the personnel card and in reports.
+- **Plan review**: when the main loop confirms a plan (ExitPlanMode), the planning lead checks for verification steps, scope, risks and guards against the departments' repeated mistakes. If something is missing it only adds a note; it never blocks.
+- The approver is a cheap model (haiku), called once per approval (8-second limit, with a one-time notice the first time). It can be wrong; if the job ended without a report or the approver gives no usable answer, the approval is left pending and scores are untouched. To skip the cost, run `/office approval off`.
 
 ### Reports
 

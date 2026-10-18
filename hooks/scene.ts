@@ -5,6 +5,7 @@
 // 셀 하나에 '▀'(위 픽셀=글자색, 아래 픽셀=배경색)로 픽셀 두 개를 그리고, 표지·명패·이름표만 ASCII 글자 셀로 덮는다.
 import type { Dept, OfficeActivity, OfficeAgent } from '../types'
 import { DEPT_INFO, DEPTS } from './hr'
+import { isSpeaking } from './speech'
 
 /** 평면도 높이(셀 줄): 제목 1줄 + 건물 26줄 */
 export const PLAN_ROWS = 27
@@ -574,6 +575,21 @@ export class Office {
     const talkers = here.filter(t => isMeeting(t, now) && settled(t) !== undefined)
     drawPlan(cv, plan, frame, occupied, new Set<RoomId>(talkers.length > 0 ? ['meet'] : []))
 
+    // 말풍선 자리: 줄마다 쓴 칸(이름표·말풍선). 겹치면 한 줄 위로, 머리 위가 없으면 발밑, 다 차면 이번 프레임은 쉰다
+    const taken = new Map<number, [number, number][]>()
+    const take = (x: number, row: number, len: number) => taken.set(row, [...(taken.get(row) ?? []), [x, x + len]])
+    const place = (x: number, rows: readonly number[], len: number): number | null => {
+      for (const r of rows) {
+        // 0줄은 제목, 1줄은 방 이름
+        if (r < 2 || r >= cv.h / 2) continue
+        const used = taken.get(r) ?? []
+        if (used.some(([a, b]) => x < b + 1 && a < x + len + 1)) continue
+        taken.set(r, [...used, [x, x + len]])
+        return r
+      }
+      return null
+    }
+
     // 부서 섬: 부서색 카펫, 표지, 팀장 책상(스탠드), 팀원 책상, 모니터와 명패
     for (const c of plan.clusters) {
       const dept = c.dept
@@ -584,6 +600,7 @@ export class Office {
         continue
       }
       cv.write(c.x, (c.y - 4) / 2, DEPT_INFO[dept].en.slice(0, CLUSTER_W - 2), DEPT_INFO[dept].color, tint)
+      take(c.x, (c.y - 4) / 2, DEPT_INFO[dept].en.slice(0, CLUSTER_W - 2).length)
       for (let seat = 0; seat < 3; seat++) {
         const x = seat === 0 ? c.x : c.x + 7 + (seat - 1) * 6
         const width = seat === 0 ? 6 : 5
@@ -607,6 +624,7 @@ export class Office {
     cv.set(plan.bossSeat.x + 1, plan.bossSeat.y - 4, b2)
 
     // 사람과 이름표
+    const speakers: { a: OfficeAgent; x: number; y: number }[] = []
     for (const a of here) {
       const wk = this.walkers.get(a.id)!
       const info = nickInfo(a.nick)
@@ -614,7 +632,8 @@ export class Office {
       if (!isMoving && wk.goal?.hidden) continue
       const isUp = !isMoving && (wk.goal?.up ?? false)
       person(cv, wk, info.color, HAIRS[hash(a.id) % HAIRS.length] ?? C.black, isUp, isMoving ? frame : null)
-      if (!isMoving) {
+      if (isSpeaking(a.say, now)) speakers.push({ a, x: wk.x, y: wk.y })
+      else if (!isMoving) {
         if (isMeeting(a, now)) {
           // 회의실 대화: 말하는 사람이 돌아가며 말풍선을 띄운다
           if (talkers[Math.floor(frame / 4) % Math.max(1, talkers.length)]?.id === a.id) {
@@ -647,8 +666,21 @@ export class Office {
       const isAtOwnDesk = !isMoving && wk.goal?.room === 'office'
       if (!isAtOwnDesk) {
         const tag = a.nick
-        cv.write(Math.max(0, Math.min(plan.w - tag.length, wk.x + 1 - Math.floor(tag.length / 2))), Math.floor(wk.y / 2) - 1, tag, a.activity === 'failed' ? C.red : info.color, C.label)
+        const tx = Math.max(0, Math.min(plan.w - tag.length, wk.x + 1 - Math.floor(tag.length / 2)))
+        cv.write(tx, Math.floor(wk.y / 2) - 1, tag, a.activity === 'failed' ? C.red : info.color, C.label)
+        take(tx, Math.floor(wk.y / 2) - 1, tag.length)
       }
+    }
+    // 말풍선은 이름표를 다 그린 뒤에 빈자리에(이름표를 덮지 않도록). 걷는 중에도 말한다
+    for (const { a, x, y } of speakers) {
+      const bubble = a.say as NonNullable<OfficeAgent['say']>
+      const text = ` ${bubble.text} `
+      const bx = Math.max(0, Math.min(plan.w - text.length, x + 1 - Math.floor(text.length / 2)))
+      const head = Math.floor(y / 2)
+      const row = place(bx, [head - 2, head - 3, head + 2], text.length)
+      if (row === null) continue
+      const fg = bubble.tone === 'bad' ? C.red : bubble.tone === 'good' ? C.green : bubble.tone === 'self' ? 0x555566 : C.black
+      cv.write(bx, row, text, fg, C.white)
     }
 
     // 제목
