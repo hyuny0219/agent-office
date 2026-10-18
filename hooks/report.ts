@@ -1,7 +1,9 @@
-// 보고서와 인사카드. 끝낸 일 기록(book.log)으로 기간별 부서 실적을 내고, 직원 한 명의 인사카드를 만든다.
+// 보고서와 인사 기록. 끝낸 일 기록(book.log)으로 기간별 부서 실적을 내고, 직원 명부와 한 명의 인사카드를 만든다.
 // 시간대를 모르므로 기간은 "지금부터 거슬러" 잰다(오늘 = 최근 24시간, 이번 주 = 최근 7일). 순수 함수만 둔다.
 import type { Employee, HrBook, JobRecord } from '../types'
-import { bonusOf, DEPT_INFO, DEPTS, gradeOf, LEAD_ALLOWANCE, leadOf, lessonsFor, RANKS, rankOf, salaryOf, tipOf } from './hr'
+import { bonusOf, CHECK_PENALTY, DEPT_INFO, DEPTS, gradeOf, isMuted, LEAD_ALLOWANCE, leadOf, lessonKey, lessonsFor, RANKS, rankOf, REWORK_PENALTY, salaryOf, tipOf } from './hr'
+import { REJECT_PENALTY } from './approval'
+import { CONTROL_EVERY, effectText } from './trial'
 import { koNick } from './scene'
 
 const HOUR_MS = 60 * 60_000
@@ -152,5 +154,33 @@ export function cardOf(book: HrBook, e: Employee, now: number): string {
       lines.push(`  - ${l.tool} "${l.pattern}" ${l.count}회${tip === null ? '' : ` → ${tip}`}`)
     }
   }
+  return lines.join('\n')
+}
+
+/** /office hr: 부서별 직원·직급·연봉·평가, 부서가 반복한 실수 */
+export function rosterText(b: HrBook, now: number): string {
+  const lines = [`에이전트 사무실 인사 기록 (업무 지시 인사 메모: ${b.isCoaching ? '켜짐' : '꺼짐'} · 교육 효과 측정: ${b.isTrialing ? '켜짐' : '꺼짐'} · 결재: ${b.isApproving ? '켜짐' : '꺼짐'})`]
+  if (b.employees.length === 0) lines.push('아직 직원이 없습니다. 서브에이전트가 일을 맡으면 부서에 배치됩니다.')
+  for (const d of DEPTS) {
+    const staffList = b.employees.filter(e => e.dept === d).sort((x, y) => y.xp - x.xp)
+    if (staffList.length === 0) continue
+    const lead = leadOf(b, d)
+    lines.push('', `${DEPT_INFO[d].ko}${lead === undefined ? '' : ` — 팀장 ${lead.nick}(${koNick(lead.nick)})`}`)
+    for (const e of staffList) {
+      const grade = e.lastScore === null ? '-' : gradeOf(e.lastScore)
+      lines.push(`  ${e.nick} ${koNick(e.nick)} · ${rankOf(e.xp).ko} · 연봉 ${won(salaryOf(b, e))}만원 · 최근 평가 ${grade} · 완료 ${e.done} / 실패 ${e.failed} · 도구 오류 ${e.toolErrors}${e.reworks > 0 ? ` · 재작업 ${e.reworks}` : ''}${e.alarms > 0 ? ` · 근태 알림 ${e.alarms}` : ''}${e.rejections > 0 ? ` · 결재 반려 ${e.rejections}` : ''} · 경력 ${e.xp}`)
+    }
+  }
+  const lessonLines = DEPTS.flatMap(d => (b.lessons[d] ?? []).slice(0, 3).map(l => {
+    const tip = tipOf(l.pattern)
+    return `  ${DEPT_INFO[d].ko}: ${l.tool} "${l.pattern}" ${l.count}회${tip === null ? '' : ` → ${tip}`}${effectText(b.trials[lessonKey(l)], isMuted(b, l, now))}`
+  }))
+  if (lessonLines.length > 0) {
+    lines.push('', '부서별 반복 실수(2회 이상이면 다음 업무 지시에 붙음):', ...lessonLines)
+    if (b.isTrialing) lines.push(`  효과: 실수 목록을 ${CONTROL_EVERY}건에 한 건은 빼고 보내 재발률을 비교합니다. 근거가 모였는데 붙여도 재발이 줄지 않으면 2주 동안 메모에서 뺐다가 다시 잽니다.`)
+  }
+  lines.push('', `평가: 완료 +10, 실패 -5(중단 -3), 도구 오류 1개당 -1(최대 -5), 오류 없이 완료 +3, 테스트·빌드 실패한 채 완료 -${CHECK_PENALTY}, 끝낸 뒤 BOSS가 같은 파일을 다시 고치면 재작업 -${REWORK_PENALTY}, 결재 반려 -${REJECT_PENALTY}.`,
+    '직급: 사원 0 · 대리 20 · 과장 60 · 차장 120 · 부장 200(경력, 감점이면 깎여 강등). 평균 평가는 최근 일에 무게를 둡니다.',
+    '한 사람의 인사카드는 /office hr <별칭>, 부서 실적 보고는 /office report [today|week].')
   return lines.join('\n')
 }

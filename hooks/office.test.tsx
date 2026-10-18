@@ -1,3 +1,5 @@
+// 사무실 mod의 테스트. 순수 함수(인사·결재·대화·보고서·교육 효과·근태·평면도)는 직접 부르고,
+// 훅은 엔진을 흉내 낸 하네스($, on)에서 띄우기·턴·도구 호출·그리기를 돌려 본다.
 import { expect, test } from 'claude-code/testing'
 
 import type { HrBook, JobRecord, OfficeAgent } from '../types'
