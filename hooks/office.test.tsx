@@ -10,7 +10,8 @@ import { agoText, cardOf, durationText, findEmployee, jobsIn, reportOf } from '.
 import { CONTROL_EVERY, effectText, enroll, markHit, MIN_CONTROL, MIN_MEMO, settle, verdictOf } from './trial'
 import { callKeyOf, errorKeyOf, isAlarm, isOvertime, isPolling, nudgeOf, OVERTIME_MS, stepOf } from './watch'
 import { activityOf, encodeCells, koNick, layoutOf, nickFor, Office, PLAN_ROWS } from './scene'
-import { addTokens, chargeReview, tokenDetail, tokensOf, tokenText, totalOf, usageOf } from './tokens'
+import { addTokens, chargeReview, costText, priceOf, tokenDetail, tokensOf, tokenText, totalOf, usageOf, usdText } from './tokens'
+import { BUDGET_MS, budgetLines, deptNamed, dollarsOf, noticed, overrunsOf, spentOf } from './budget'
 import { accuracyLines, accuracyOf, FOLLOW_MS, followUp, IDLE_MS, isRejectTrusted, isSimilar, judgeOf, pickFor, reinstate, reorgOf } from './org'
 
 const agent = (id: string, over: Partial<OfficeAgent> = {}): OfficeAgent => ({
@@ -1051,17 +1052,36 @@ test('설정이 비어 있으면 다른 패널에 끼어들지 않는다', async
 })
 
 test('토큰: 사용량 네 가지를 더하고 짧게 적으며, 저장된 값은 모양을 보고 읽고, 결재 토큰은 그 일 기록에 붙는다', () => {
-  const t = usageOf({ input_tokens: 1200, output_tokens: 800, cache_read_input_tokens: 10_000, cache_creation_input_tokens: 300 })
+  const t = usageOf({ input_tokens: 1200, output_tokens: 800, cache_read_input_tokens: 10_000, cache_creation_input_tokens: 300 }, 'claude-sonnet-5-5')
+  // 소네트 5.5: 입력 $2·출력 $10·캐시 읽기 $0.20, 캐시 쓰기는 입력의 1.25배(백만 토큰당)
+  expect(Math.abs(t.usd - (1200 * 2 + 800 * 10 + 10_000 * 0.2 + 300 * 2.5) / 1e6) < 1e-12).toBe(true)
+  expect(t.unpriced).toBe(0)
+  expect(priceOf('claude-opus-5-5')).toEqual({ input: 4, output: 20, cacheRead: 0.2 })
+  expect(priceOf('claude-opus-5-20260101')?.input).toBe(5)
+  expect(priceOf('claude-sonnet-5-5[1m]')?.input).toBe(2)
+  expect(priceOf('haiku')?.input).toBe(0.1)
+  expect(priceOf('gpt-x')).toBeNull()
+  expect(priceOf('claude-opus-5')?.input).toBe(5)
+  expect(priceOf('us.anthropic.claude-opus-5-5-v1:0')?.input).toBe(4)
+  expect(priceOf('claude-opus-5-5@20261001')?.input).toBe(4)
+  expect(priceOf('claude-opus-5-1')).toBeNull()
+  expect(priceOf('claude-opus-4-5')).toBeNull()
+  const unknown = usageOf({ input_tokens: 100 }, 'mystery')
+  expect([unknown.usd, unknown.unpriced, costText(unknown)]).toEqual([0, 100, '가격 모름'])
+  expect(costText(addTokens(t, unknown))).toBe('$0.01+(가격 모름 100)')
+  expect([usdText(0.0042), usdText(3.4), usdText(1234)]).toEqual(['$0.0042', '$3.40', '$1,234'])
   expect(totalOf(t)).toBe(12_300)
-  expect(usageOf({ input_tokens: 5, output_tokens: Number.NaN })).toEqual({ input: 5, output: 0, cacheRead: 0, cacheWrite: 0 })
+  expect(usageOf({ input_tokens: 5, output_tokens: Number.NaN })).toEqual({ input: 5, output: 0, cacheRead: 0, cacheWrite: 0, usd: 0, unpriced: 5 })
   expect(totalOf(addTokens(t, undefined))).toBe(12_300)
   expect(totalOf(addTokens(t, t))).toBe(24_600)
   expect([tokenText(850), tokenText(12_300), tokenText(120_000), tokenText(1_234_567)]).toEqual(['850', '12.3k', '120k', '1.2M'])
   expect([tokenText(999.7), tokenText(99_960), tokenText(100_000), tokenText(999_950)]).toEqual(['1.0k', '100k', '100k', '1.0M'])
-  expect(tokenDetail(t)).toBe('12.3k(입력 1.2k · 출력 800 · 캐시 읽기 10.0k · 캐시 쓰기 300)')
+  expect(tokenDetail(t)).toBe('12.3k(입력 1.2k · 출력 800 · 캐시 읽기 10.0k · 캐시 쓰기 300) · 비용 약 $0.01')
   expect(tokensOf('x')).toBeUndefined()
   expect(tokensOf({ input: 0 })).toBeUndefined()
-  expect(tokensOf({ input: 3, output: 'a' })).toEqual({ input: 3, output: 0, cacheRead: 0, cacheWrite: 0 })
+  // 달러를 세기 전(v0.10)의 값은 모두 가격 모르는 토큰으로 읽는다
+  expect(tokensOf({ input: 3, output: 'a' })).toEqual({ input: 3, output: 0, cacheRead: 0, cacheWrite: 0, usd: 0, unpriced: 3 })
+  expect(tokensOf({ input: 3, usd: 0.5, unpriced: 99 })).toEqual({ input: 3, output: 0, cacheRead: 0, cacheWrite: 0, usd: 0.5, unpriced: 3 })
 
   const rec: JobRecord = { nick: 'BEAR', dept: 'dev', job: 1, description: '빌드', startedAt: 0, endedAt: 1, outcome: 'done', score: 13, errors: 0, isCheckFailed: false, isReworked: false, alarms: 0 }
   const b = { ...emptyBook(), log: [rec, { ...rec, job: 2 }] }
@@ -1106,7 +1126,7 @@ test('토큰: 일하며 부른 모델의 토큰을 패널 줄에 보이고, 끝�
     return { result: 'ok' }
   })
   on('turn.complete', () => ({ text: '' }))
-  const usage = { input_tokens: 1000, output_tokens: 500, cache_read_input_tokens: 8000, cache_creation_input_tokens: 500, model: 'm' }
+  const usage = { input_tokens: 1000, output_tokens: 500, cache_read_input_tokens: 8000, cache_creation_input_tokens: 500, model: 'claude-sonnet-5-5' }
   on('turn.step', async function* (_$, e) {
     return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn', usage }
   })
@@ -1123,8 +1143,9 @@ test('토큰: 일하며 부른 모델의 토큰을 패널 줄에 보이고, 끝�
   await step('c1')
   await step()
   const ui = await $.ui.mount({ plugin: 'agent-office', surface: 'terminal', component: 'Pane', requestId: 'agent-office', props: PROPS, viewport: { columns: 96, rows: 50 } })
-  expect((await ui.find({ key: 'row-c1' }))?.text).toContain('도구 0회 · 토큰 20.0k')
-  expect((await ui.find({ key: 'row-main' }))?.text).toContain('토큰 10.0k')
+  // 한 번에 $0.00985(입력 1000×$2 + 출력 500×$10 + 캐시 읽기 8000×$0.2 + 캐시 쓰기 500×$2.5, 백만 토큰당)
+  expect((await ui.find({ key: 'row-c1' }))?.text).toContain('도구 0회 · 토큰 20.0k($0.02)')
+  expect((await ui.find({ key: 'row-main' }))?.text).toContain('토큰 10.0k($0.0098)')
 
   for (const f of ['a', 'b', 'c']) await $.tool.call({ tool: 'Read', file_path: `/r/${f}.ts`, agentId: 'c1' } as never)
   status = 'completed'
@@ -1132,12 +1153,119 @@ test('토큰: 일하며 부른 모델의 토큰을 패널 줄에 보이고, 끝�
   await $.tool.call({ tool: 'Agent', description: '고치기', prompt: '버그를 고쳐', subagent_type: 'builder' } as never)
   await $.tool.call({ tool: 'Read', file_path: '/r/x.ts' } as never)
 
-  expect(JSON.stringify(await $.command.run({ command: 'office', args: 'hr', ...RUN }))).toContain('· 토큰 20.0k · 경력')
+  expect(JSON.stringify(await $.command.run({ command: 'office', args: 'hr', ...RUN }))).toContain('· 토큰 20.0k($0.02) · 경력')
   const card = JSON.stringify(await $.command.run({ command: 'office', args: 'hr BEAR', ...RUN }))
-  expect(card).toContain('토큰 누적 20.0k(입력 2.0k · 출력 1.0k · 캐시 읽기 16.0k · 캐시 쓰기 1.0k) · 한 건 평균 20.0k')
-  expect(card).toContain('· 토큰 20.0k')
+  expect(card).toContain('토큰 누적 20.0k(입력 2.0k · 출력 1.0k · 캐시 읽기 16.0k · 캐시 쓰기 1.0k) · 비용 약 $0.02 · 한 건 평균 20.0k')
+  expect(card).toContain('· 토큰 20.0k($0.02)')
   const report = JSON.stringify(await $.command.run({ command: 'office', args: 'report', ...RUN }))
-  expect(report).toContain('토큰: 업무 20.0k · 결재 500(입력·출력·캐시를 모두 더함)')
-  expect(report).toContain('토큰 20.0k')
-  expect(report).toContain('토큰을 많이 쓴 직원: BEAR 20.0k(1건, 한 건 20.0k)')
+  // 결재(haiku = 하이쿠 5.5)는 400×$0.1 + 100×$0.5 = $0.00009
+  expect(report).toContain('토큰: 업무 20.0k($0.02) · 결재 500($0.0001) · 비용 합계 약 $0.02(API 정가로 어림')
+  expect(report).toContain('개발팀: 1건')
+  expect(report).toContain('토큰(결재 포함) 20.5k($0.02)')
+  expect(report).toContain('토큰을 많이 쓴 직원: BEAR 20.0k($0.02, 1건, 한 건 20.0k)')
+})
+
+test('예산: 부서 이름·금액을 읽고, 최근 24시간 비용(끝낸 일과 결재, 일하는 중인 사람)을 재며, 넘으면 하루에 한 번만 고른다', () => {
+  expect([deptNamed('개발팀'), deptNamed('개발'), deptNamed('DEV'), deptNamed('research'), deptNamed('영업')]).toEqual(['dev', 'dev', 'dev', 'research', null])
+  expect([dollarsOf('$5'), dollarsOf('2.5'), dollarsOf('0'), dollarsOf('abc'), dollarsOf('1e3'), dollarsOf('0x10'), dollarsOf('-1')]).toEqual([5, 2.5, null, null, null, null, null])
+  const use = (usd: number) => ({ input: 1, output: 0, cacheRead: 0, cacheWrite: 0, usd, unpriced: 0 })
+  const rec: JobRecord = { nick: 'BEAR', dept: 'dev', job: 1, description: '빌드', startedAt: 0, endedAt: 0, outcome: 'done', score: 13, errors: 0, isCheckFailed: false, isReworked: false, alarms: 0 }
+  const now = BUDGET_MS + 1000
+  const b: HrBook = { ...emptyBook(), budgets: { dev: 1 }, log: [
+    { ...rec, endedAt: now - 1000, tokens: use(0.5), reviewTokens: use(0.1) },
+    { ...rec, job: 2, endedAt: 500, tokens: use(9) }, // 24시간 전이라 빠진다
+    { ...rec, job: 3, dept: 'qa', endedAt: now, tokens: use(9) },
+  ] }
+  const running = [agent('x1', { tokens: use(0.3) }), agent('x2', { tokens: use(5), endedAt: now }), agent('main', { dept: 'dev', tokens: use(5) })]
+  expect(Math.abs(spentOf(b, running, 'dev', now) - 0.9) < 1e-9).toBe(true)
+  expect(overrunsOf(b, running, now)).toEqual([])
+  const more = [...running, agent('x3', { tokens: use(0.2) })]
+  const over = overrunsOf(b, more, now)
+  expect(over.map(o => o.dept)).toEqual(['dev'])
+  // 알린 뒤 24시간 동안은 다시 고르지 않고, 지나면 다시 고른다
+  const told = noticed(b, ['dev'], now)
+  expect(overrunsOf(told, more, now + 1000)).toEqual([])
+  expect(overrunsOf(told, more, now + BUDGET_MS + 1).length).toBe(0) // 하루 지나면 옛 기록도 빠져 비용이 줄어든다
+  expect(overrunsOf(told, [agent('x9', { tokens: use(2) })], now + BUDGET_MS + 1).map(o => o.dept)).toEqual(['dev'])
+  expect(budgetLines(b, more, now)).toEqual(['하루 예산(최근 24시간, API 정가로 어림):', '  개발팀: $1.10 / $1.00(110%) · 초과'])
+  expect(budgetLines(emptyBook(), [], now)).toEqual([])
+
+  // 저장된 예산은 모르는 부서·0 이하·수가 아닌 값을 버린다
+  const back = migrate(JSON.parse(JSON.stringify({ ...emptyBook(), budgets: { dev: 5, qa: 0, sales: 3, docs: 'x' }, budgetNotices: { dev: 10, nope: 1 } }))) as HrBook
+  expect(back.budgets).toEqual({ dev: 5 })
+  expect(back.budgetNotices).toEqual({ dev: 10 })
+  expect(migrate({ employees: [] })?.budgets).toEqual({})
+})
+
+test('예산: /office budget으로 정하고 끄며, 일하는 직원이 한도를 넘기면 토스트와 메신저로 한 번만 알리고, 일간 보고에 싣는다', async ($, on) => {
+  const store = new Map<string, unknown>()
+  on('store.get', (_$, e) => ({ value: store.get(e.key) }))
+  on('store.set', (_$, e) => {
+    store.set(e.key, e.value)
+    return { value: undefined }
+  })
+  on('clock.now', () => ({ value: 5000 }))
+  on('agent.spawn', () => ({ model: 'm', agentId: 'c1' }))
+  on('agent.list', () => ({ value: [{ id: 'c1', description: '고치기', type: 'builder', status: 'running' }] }))
+  const toasts: string[] = []
+  on('ui.toast', (_$, e) => {
+    toasts.push(JSON.stringify(e))
+    return { value: undefined }
+  })
+  on('tool.call', () => ({ result: 'ok' }))
+  // 한 번에 오퍼스 5.5 출력 100만 토큰 = $20
+  on('turn.step', async function* (_$, e) {
+    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn', usage: { input_tokens: 0, output_tokens: 1_000_000, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, model: 'claude-opus-5-5' } }
+  })
+  const step = async (agentId?: string) => {
+    const s = $.turn.step({ turnId: 's', index: 0, model: 'm', messageCount: 1, ...(agentId === undefined ? {} : { agentId }) })
+    let r = await s.next()
+    while (r.done !== true) r = await s.next()
+  }
+  const run = async (args: string) => JSON.stringify(await $.command.run({ command: 'office', args, ...RUN }))
+
+  expect(await run('budget')).toContain('부서 예산이 없습니다')
+  expect(await run('budget 영업 5')).toContain('영업라는 부서가 없습니다')
+  expect(await run('budget 개발팀 abc')).toContain('쓰는 법')
+  expect(await run('budget 개발팀 30')).toContain('개발팀 하루 예산을 $30.00로 정합니다')
+  expect(await run('hr')).toContain('예산: 개발팀 하루 $30.00')
+
+  await $.agent.spawn({ tool_use_id: 't1', prompt: '고쳐', description: '고치기', subagentType: 'builder', ...SPAWN })
+  await step('c1')
+  expect(toasts.join()).not.toContain('예산 초과')
+  // BOSS가 쓴 것은 부서 예산에 들지 않는다
+  await step()
+  await step()
+  expect(toasts.join()).not.toContain('예산 초과')
+  await step('c1')
+  expect(toasts.filter(t => t.includes('예산 초과')).length).toBe(1)
+  expect(toasts.join()).toContain('개발팀 하루 예산 초과: 최근 24시간 $40.00 / 예산 $30.00(133%)')
+  await step('c1')
+  expect(toasts.filter(t => t.includes('예산 초과')).length).toBe(1)
+  expect(await run('report')).toContain('개발팀: $60.00 / $30.00(200%) · 초과')
+  expect(await run('budget')).toContain('하루 예산(최근 24시간')
+  // 한도를 새로 정하면 다시 알릴 수 있다
+  await run('budget dev 50')
+  await step('c1')
+  expect(toasts.filter(t => t.includes('예산 초과')).length).toBe(2)
+  expect(await run('budget 개발 OFF')).toContain('개발팀 예산을 없앱니다')
+  expect(await run('budget')).toContain('부서 예산이 없습니다')
+})
+
+test('토큰: v0.10이 남긴 사무실 사람들의 토큰(달러 없음)은 가격 모름으로 읽고, 더해도 $0으로 굳지 않는다', async ($, on) => {
+  on('store.get', () => ({ value: undefined }))
+  on('store.set', () => ({ value: undefined }))
+  on('clock.now', () => ({ value: 5000 }))
+  // v0.10이 남긴 사무실 사람들(처음 한 번 읽고, 그 뒤로는 모듈 사본을 쓴다)
+  on('state.get', (_$, e) => ({ value: { value: (e as { key?: string }).key === 'agents' ? [{ ...boss, tokens: { input: 5000, output: 0, cacheRead: 0, cacheWrite: 0 } }] : [], version: 1 } }) as never)
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('turn.step', async function* (_$, e) {
+    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn', usage: { input_tokens: 1_000_000, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, model: 'claude-opus-5-5' } }
+  })
+  const s = $.turn.step({ turnId: 's', index: 0, model: 'm', messageCount: 1 })
+  let r = await s.next()
+  while (r.done !== true) r = await s.next()
+  await $.command.run({ command: 'office', args: '', ...RUN })
+  const ui = await $.ui.mount({ plugin: 'agent-office', surface: 'terminal', component: 'Pane', requestId: 'agent-office', props: PROPS, viewport: { columns: 96, rows: 50 } })
+  expect((await ui.find({ key: 'row-main' }))?.text).toContain('토큰 1.0M($4.00+(가격 모름 5.0k))')
 })

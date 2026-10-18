@@ -13,6 +13,8 @@ import { settle } from './trial'
 import { callKeyOf, ERROR_STREAK, errorKeyOf, errorToast, isAlarm, isOvertime, isPolling, nudgeOf, REPEAT_STREAK, repeatToast, stepOf } from './watch'
 import { shortType } from './scene'
 import { addTokens, chargeReview, usageOf } from './tokens'
+import { noticed, overrunsOf, overrunText } from './budget'
+import type { Overrun } from './budget'
 import { admit, agentsOf, fresh, hold, hrOf, keptNow, MEET_MS, meet, nickOfId, patch, release, save, saveHr, speak } from './store'
 
 /** 파일을 고치는 도구(재작업 판정에 쓴다) */
@@ -121,6 +123,8 @@ async function review1($: EngineInterface, a: OfficeAgent, isDone: boolean, isKi
       })
       .finally(() => release(a.nick))
       .then(() => reorganize($))
+      // 결재에 쓴 비용도 그 부서 예산에 든다
+      .then(() => checkBudget($))
       .catch(() => undefined)
       .finally(() => {
         approvals.delete(a.id)
@@ -184,7 +188,7 @@ async function approve($: EngineInterface, nick: string, job: number, xpBefore: 
   const ask = requestOf(e, route, f)
   const reply = await $.model.complete({ model: APPROVER_MODEL, system: ask.system, prompt: ask.prompt, maxTokens: 400, effort: 'low', timeoutMs: APPROVAL_TIMEOUT_MS })
   // 결재에 쓴 토큰은 답을 못 받았어도 그 일 기록에 남긴다
-  const spent = usageOf(reply.usage ?? {})
+  const spent = usageOf(reply.usage ?? {}, APPROVER_MODEL)
   const d = reply.isAnswered ? decisionOf(reply.text) : null
   if (d === null) {
     await saveHr($, x => chargeReview(x, nick, job, spent))
@@ -229,6 +233,24 @@ export function takeNotes(callerId: string, agents: readonly OfficeAgent[]): str
   const mine = notes.filter(n => n.parentId === callerId || (callerId === 'main' && isGone(n.parentId)))
   notes = notes.filter(n => !mine.includes(n))
   return mine.map(n => n.text)
+}
+
+/** 부서 예산: 넘었는데 아직 알리지 않은 부서를 알린다(고르고 적는 일은 한 번의 저장 안에서: 나란히 불려도 한 번만 알리도록) */
+export async function checkBudget($: EngineInterface) {
+  const b = await hrOf($)
+  if (Object.keys(b.budgets).length === 0) return
+  const agents = await agentsOf($)
+  const now = await $.clock.now()
+  if (overrunsOf(b, agents, now).length === 0) return
+  let over: Overrun[] = []
+  await saveHr($, x => {
+    over = overrunsOf(x, agents, now)
+    return noticed(x, over.map(o => o.dept), now)
+  })
+  for (const o of over) {
+    $.ui.toast(`${overrunText(o)}. 한도를 바꾸려면 /office budget ${o.dept} <달러>`)
+    await speak($, null, null, hrLineOf(overrunText(o), now))
+  }
 }
 
 /** 누군가(별칭 by) 파일을 고쳤다: 방금 끝낸 다른 사람의 일이면 그 기록에 후속 수정을 적는다(결재 정확도). 재작업 감점보다 먼저 본다 */

@@ -49,8 +49,11 @@ export type OfficeAgent = {
   tokens?: TokenUse
 }
 
-/** 모델 호출이 쓴 토큰: 입력(캐시 안 된 것)·출력·캐시 읽기·캐시 쓰기 */
-export type TokenUse = { input: number; output: number; cacheRead: number; cacheWrite: number }
+/**
+ * 모델 호출이 쓴 토큰: 입력(캐시 안 된 것)·출력·캐시 읽기·캐시 쓰기, 그 모델의 API 정가로 어림한 달러,
+ * 가격을 모르는 모델이 쓴 토큰 수(달러에 들지 않은 몫)
+ */
+export type TokenUse = { input: number; output: number; cacheRead: number; cacheWrite: number; usd: number; unpriced: number }
 
 /** 평면도 머리 위 말풍선: 영문 짧은 말, 그 말을 한 때, 말투(혼잣말·대화·실수·좋은 소식) */
 export type Bubble = { text: string; at: number; tone: 'self' | 'talk' | 'bad' | 'good' }
@@ -193,6 +196,10 @@ export type HrBook = {
   isReorgNoticed: boolean
   /** 떠난 직원(최근 떠난 것부터). 별칭을 다시 쓰지 않고, 인사카드를 남긴다 */
   retired: Retiree[]
+  /** 부서별 하루(최근 24시간) 비용 한도, 달러(/office budget) */
+  budgets: Partial<Record<Dept, number>>
+  /** 부서별로 예산 초과를 마지막으로 알린 때(24시간에 한 번만 알린다) */
+  budgetNotices: Partial<Record<Dept, number>>
 }
 
 declare module 'claude-code' {

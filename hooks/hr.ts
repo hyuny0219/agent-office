@@ -81,7 +81,7 @@ export const scoreOf = (r: JobResult): number => {
 
 export const gradeOf = (score: number): string => (score >= 13 ? 'S' : score >= 10 ? 'A' : score >= 6 ? 'B' : score >= 0 ? 'C' : 'D')
 
-export const emptyBook = (): HrBook => ({ version: 2, employees: [], lessons: {}, handoffs: [], isCoaching: true, isTrialing: true, trialSeq: 0, trials: {}, log: [], isApproving: true, isApprovalNoticed: false, isReorganizing: true, isReorgNoticed: false, retired: [] })
+export const emptyBook = (): HrBook => ({ version: 2, employees: [], lessons: {}, handoffs: [], isCoaching: true, isTrialing: true, trialSeq: 0, trials: {}, log: [], isApproving: true, isApprovalNoticed: false, isReorganizing: true, isReorgNoticed: false, retired: [], budgets: {}, budgetNotices: {} })
 
 /**
  * 저장된 인사 기록을 지금 형식으로 옮긴다. 예전 판(version 1)이나 모르는 판이라도 직원 명부가 있으면
@@ -129,6 +129,11 @@ export function migrate(stored: unknown): HrBook | null {
     trials[k] = { memo: arm(s.memo), control: arm(s.control), lastAt: num(s.lastAt, 0), ...(at === null ? {} : { ineffectiveAt: at }) }
   }
   const isNum = (x: unknown): x is number => typeof x === 'number' && Number.isFinite(x)
+  /** 부서 → 수(모르는 부서·수가 아닌 값·조건에 맞지 않는 값은 버린다) */
+  const perDept = (x: unknown, isOk: (n: number) => boolean): Partial<Record<Dept, number>> => {
+    const o = typeof x === 'object' && x !== null ? x as Record<string, unknown> : {}
+    return Object.fromEntries(DEPTS.flatMap(d => (isNum(o[d]) && isOk(o[d]) ? [[d, o[d]]] : [])))
+  }
   const log = (Array.isArray(v.log) ? v.log : []).filter((x): x is JobRecord =>
     typeof x?.nick === 'string' && isNum(x.job) && isNum(x.startedAt) && isNum(x.endedAt) && isNum(x.score)
     && (x.outcome === 'done' || x.outcome === 'failed' || x.outcome === 'killed'))
@@ -147,6 +152,7 @@ export function migrate(stored: unknown): HrBook | null {
     ...v, version: 2, employees, lessons, handoffs, trials, log, retired,
     isCoaching: v.isCoaching !== false, isTrialing: v.isTrialing !== false, isApproving: v.isApproving !== false, isApprovalNoticed: v.isApprovalNoticed === true, trialSeq: num(v.trialSeq, 0),
     isReorganizing: v.isReorganizing !== false, isReorgNoticed: v.isReorgNoticed === true,
+    budgets: perDept(v.budgets, x => x > 0), budgetNotices: perDept(v.budgetNotices, () => true),
   }
 }
 

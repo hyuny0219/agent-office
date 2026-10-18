@@ -8,7 +8,7 @@ import { messageOf, oopsOf, orderOf, replyOf, selfTalkOf } from './speech'
 import { enroll, errorLessonKey, markHit } from './trial'
 import { activityOf, layoutOf } from './scene'
 import { answer, COMMAND } from './commands'
-import { awaitApproval, checkFollowUp, checkRework, EDIT_TOOLS, fileOf, isCheckCommand, papers, reorganize, reviewPlan, syncStatus, takeNotes, watch } from './flow'
+import { awaitApproval, checkBudget, checkFollowUp, checkRework, EDIT_TOOLS, fileOf, isCheckCommand, papers, reorganize, reviewPlan, syncStatus, takeNotes, watch } from './flow'
 import { usageOf } from './tokens'
 import { admit, agentsOf, chargeAgent, ensure, fresh, hold, hrOf, MEET_MS, meet, nickOfId, patch, readFeed, release, save, saveHr, speak, staff, watchAgents } from './store'
 import { cellsOf, dropOffice, feedRowsOf, FRAME_MS, markPaneShown, officeAt, RASTER, rowsOf, tick } from './view'
@@ -92,7 +92,9 @@ export const register: Register = (on, options) => {
   // 모델을 부를 때마다 그 에이전트가 쓴 토큰을 더한다(기록이 실패해도 응답은 그대로 넘긴다)
   on('turn.step', async function* ($, e, next) {
     const step = yield* next(e)
-    if (step.usage != null) await chargeAgent($, e.agentId ?? 'main', usageOf(step.usage)).catch(() => undefined)
+    if (step.usage != null) await chargeAgent($, e.agentId ?? 'main', usageOf(step.usage, step.usage.model)).catch(() => undefined)
+    // 직원이 쓴 만큼 부서 예산을 본다(BOSS는 부서가 없다)
+    if (step.usage != null && e.agentId !== undefined) await checkBudget($).catch(() => undefined)
     return step
   })
 

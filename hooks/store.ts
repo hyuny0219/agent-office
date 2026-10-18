@@ -8,7 +8,7 @@ import { assign, DEPTS, deptOf, emptyBook, hire, leadOf, migrate } from './hr'
 import { pickFor } from './org'
 import type { Assignment } from './org'
 import { pushLine } from './speech'
-import { addTokens, totalOf } from './tokens'
+import { addTokens, tokensOf, totalOf } from './tokens'
 import { nickFor } from './scene'
 import type { Leads } from './scene'
 
@@ -76,7 +76,10 @@ export async function agentsOf($: EngineInterface): Promise<OfficeAgent[]> {
     const loaded: OfficeAgent[] = []
     for (const a of await read($, agentsAtom)) {
       const nick = a.nick || newNick(a.type, loaded, b)
-      loaded.push({ ...a, nick, dept: a.dept ?? (a.id === 'main' ? undefined : deptOf(a.type)) })
+      // 토큰은 지금 모양으로 읽는다(달러를 세기 전 v0.10의 토큰은 가격 모름으로)
+      const { tokens: had, ...rest } = a
+      const tokens = tokensOf(had)
+      loaded.push({ ...rest, nick, dept: a.dept ?? (a.id === 'main' ? undefined : deptOf(a.type)), ...(tokens === undefined ? {} : { tokens }) })
     }
     cache = loaded
   }
