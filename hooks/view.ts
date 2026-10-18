@@ -9,6 +9,7 @@ import { ERROR_STREAK, isOvertime, REPEAT_STREAK } from './watch'
 import { encodeCells, isMeeting, koNick, Office, seated, shortType } from './scene'
 import type { Layout } from './scene'
 import { syncStatus } from './flow'
+import { tokenText, totalOf } from './tokens'
 import { agentsOf, hrOf, leadsOf } from './store'
 
 export const RASTER = 'office'
@@ -45,13 +46,14 @@ export function rowsOf(agents: readonly OfficeAgent[], b: HrBook, now: number): 
       : STATUS_WORD[a.activity]
     const mins = Math.floor(((a.endedAt ?? now) - a.startedAt) / 60_000)
     const errs = a.errors ? ` · 오류 ${a.errors}` : ''
+    const used = totalOf(a.tokens) > 0 ? ` · 토큰 ${tokenText(totalOf(a.tokens))}` : ''
     const signs = [
       streakMax(a) >= ERROR_STREAK ? `같은 실수 ${streakMax(a)}연속` : null,
       (a.callStreak?.count ?? 0) >= REPEAT_STREAK ? '제자리걸음' : null,
       isOvertime(a.startedAt, a.endedAt, now) && a.id !== 'main' ? '야근' : null,
     ].filter(x => x !== null).map(x => ` · ${x}`).join('')
     const talk = isSpeaking(a.say, now) ? ` · "${a.say.text}"` : ''
-    return { key: `row-${a.id}`, text: `${a.nick} ${who} · ${where}${talk} · 도구 ${a.tools}회${errs}${signs} · ${mins}분 · ${a.description || '-'}`, isOff: a.endedAt !== null, isBad: a.activity === 'failed' }
+    return { key: `row-${a.id}`, text: `${a.nick} ${who} · ${where}${talk} · 도구 ${a.tools}회${used}${errs}${signs} · ${mins}분 · ${a.description || '-'}`, isOff: a.endedAt !== null, isBad: a.activity === 'failed' }
   })
 }
 

@@ -12,6 +12,7 @@ import { followUp, isRejectTrusted, reinstate, reorgOf } from './org'
 import { settle } from './trial'
 import { callKeyOf, ERROR_STREAK, errorKeyOf, errorToast, isAlarm, isOvertime, isPolling, nudgeOf, REPEAT_STREAK, repeatToast, stepOf } from './watch'
 import { shortType } from './scene'
+import { addTokens, chargeReview, usageOf } from './tokens'
 import { admit, agentsOf, fresh, hold, hrOf, keptNow, MEET_MS, meet, nickOfId, patch, release, save, saveHr, speak } from './store'
 
 /** 파일을 고치는 도구(재작업 판정에 쓴다) */
@@ -83,7 +84,10 @@ async function review1($: EngineInterface, a: OfficeAgent, isDone: boolean, isKi
   let xpBefore = 0
   await saveHr($, x => {
     xpBefore = x.employees.find(y => y.nick === a.nick)?.xp ?? 0
-    result = review(x, a.nick, { isDone, isKilled, errors: got.errors ?? 0, tools: got.tools, isCheckFailed: got.isCheckFailed }, now)
+    const reviewed = review(x, a.nick, { isDone, isKilled, errors: got.errors ?? 0, tools: got.tools, isCheckFailed: got.isCheckFailed }, now)
+    // 이번 일에 쓴 토큰을 직원 누적에 더한다
+    result = got.tokens === undefined ? reviewed
+      : { ...reviewed, book: { ...reviewed.book, employees: reviewed.book.employees.map(y => (y.nick === a.nick ? { ...y, tokens: addTokens(y.tokens, got.tokens), tokenJobs: (y.tokenJobs ?? 0) + 1 } : y)) } }
     // 끝낸 일의 파일은 남겨 두고, BOSS가 곧 다시 고치면 재작업으로 본다
     const employee = result.book.employees.find(x => x.nick === a.nick)
     const job = employee?.jobs ?? 0
@@ -91,7 +95,7 @@ async function review1($: EngineInterface, a: OfficeAgent, isDone: boolean, isKi
       nick: a.nick, dept: a.dept ?? deptOf(a.type), job, description: got.description, startedAt: got.startedAt, endedAt: got.endedAt ?? now,
       outcome: isDone ? 'done' : isKilled ? 'killed' : 'failed', score: result.score, errors: got.errors ?? 0,
       isCheckFailed: isDone && got.isCheckFailed === true, isReworked: false, alarms: got.alarms ?? 0, files: (got.files ?? []).length,
-      ...(employee === undefined ? {} : { salary: salaryOf(result.book, employee) }),
+      ...(employee === undefined ? {} : { salary: salaryOf(result.book, employee) }), ...(got.tokens === undefined ? {} : { tokens: got.tokens }),
     })
     // 인계 시각은 기록의 끝난 시각과 같게(후속 수정·재작업을 같은 창으로 잰다)
     return isDone ? handOff(logged, { agentId: a.id, nick: a.nick, files: got.files ?? [], endedAt: got.endedAt ?? now, job }) : logged
@@ -179,14 +183,17 @@ async function approve($: EngineInterface, nick: string, job: number, xpBefore: 
   const penalty = isRejectTrusted(b, route.approver, await $.clock.now()) ? REJECT_PENALTY : 0
   const ask = requestOf(e, route, f)
   const reply = await $.model.complete({ model: APPROVER_MODEL, system: ask.system, prompt: ask.prompt, maxTokens: 400, effort: 'low', timeoutMs: APPROVAL_TIMEOUT_MS })
+  // 결재에 쓴 토큰은 답을 못 받았어도 그 일 기록에 남긴다
+  const spent = usageOf(reply.usage ?? {})
   const d = reply.isAnswered ? decisionOf(reply.text) : null
   if (d === null) {
+    await saveHr($, x => chargeReview(x, nick, job, spent))
     $.ui.toast(decisionToast(e, route, f.description, null))
     return null
   }
   let moved: ReturnType<typeof decide> | null = null
   await saveHr($, x => {
-    moved = decide(x, nick, job, d.verdict, penalty, route.approver)
+    moved = decide(chargeReview(x, nick, job, spent), nick, job, d.verdict, penalty, route.approver)
     return moved.book
   })
   const m = moved as ReturnType<typeof decide> | null

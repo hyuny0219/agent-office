@@ -10,6 +10,7 @@ import { agoText, cardOf, durationText, findEmployee, jobsIn, reportOf } from '.
 import { CONTROL_EVERY, effectText, enroll, markHit, MIN_CONTROL, MIN_MEMO, settle, verdictOf } from './trial'
 import { callKeyOf, errorKeyOf, isAlarm, isOvertime, isPolling, nudgeOf, OVERTIME_MS, stepOf } from './watch'
 import { activityOf, encodeCells, koNick, layoutOf, nickFor, Office, PLAN_ROWS } from './scene'
+import { addTokens, chargeReview, tokenDetail, tokensOf, tokenText, totalOf, usageOf } from './tokens'
 import { accuracyLines, accuracyOf, FOLLOW_MS, followUp, IDLE_MS, isRejectTrusted, isSimilar, judgeOf, pickFor, reinstate, reorgOf } from './org'
 
 const agent = (id: string, over: Partial<OfficeAgent> = {}): OfficeAgent => ({
@@ -1047,4 +1048,96 @@ test('설정이 비어 있으면 다른 패널에 끼어들지 않는다', async
   })
   const ui = await $.ui.mount({ plugin: 'agent-office', surface: 'terminal', component: 'Pane', requestId: 'host-pane', props: { ...PROPS, title: '다른 패널' }, viewport: { columns: 96, rows: 60 } })
   expect(JSON.stringify(await ui.drawn())).not.toContain('Raster')
+})
+
+test('토큰: 사용량 네 가지를 더하고 짧게 적으며, 저장된 값은 모양을 보고 읽고, 결재 토큰은 그 일 기록에 붙는다', () => {
+  const t = usageOf({ input_tokens: 1200, output_tokens: 800, cache_read_input_tokens: 10_000, cache_creation_input_tokens: 300 })
+  expect(totalOf(t)).toBe(12_300)
+  expect(usageOf({ input_tokens: 5, output_tokens: Number.NaN })).toEqual({ input: 5, output: 0, cacheRead: 0, cacheWrite: 0 })
+  expect(totalOf(addTokens(t, undefined))).toBe(12_300)
+  expect(totalOf(addTokens(t, t))).toBe(24_600)
+  expect([tokenText(850), tokenText(12_300), tokenText(120_000), tokenText(1_234_567)]).toEqual(['850', '12.3k', '120k', '1.2M'])
+  expect([tokenText(999.7), tokenText(99_960), tokenText(100_000), tokenText(999_950)]).toEqual(['1.0k', '100k', '100k', '1.0M'])
+  expect(tokenDetail(t)).toBe('12.3k(입력 1.2k · 출력 800 · 캐시 읽기 10.0k · 캐시 쓰기 300)')
+  expect(tokensOf('x')).toBeUndefined()
+  expect(tokensOf({ input: 0 })).toBeUndefined()
+  expect(tokensOf({ input: 3, output: 'a' })).toEqual({ input: 3, output: 0, cacheRead: 0, cacheWrite: 0 })
+
+  const rec: JobRecord = { nick: 'BEAR', dept: 'dev', job: 1, description: '빌드', startedAt: 0, endedAt: 1, outcome: 'done', score: 13, errors: 0, isCheckFailed: false, isReworked: false, alarms: 0 }
+  const b = { ...emptyBook(), log: [rec, { ...rec, job: 2 }] }
+  const charged = chargeReview(chargeReview(b, 'BEAR', 1, t), 'BEAR', 1, t)
+  expect(totalOf(charged.log[0]?.reviewTokens)).toBe(24_600)
+  expect(charged.log[1]?.reviewTokens).toBeUndefined()
+  expect(chargeReview(b, 'BEAR', 1, usageOf({}))).toBe(b)
+
+  // 인사 기록을 다시 읽어도 토큰은 남고, 모양이 틀린 값은 버린다
+  const stored = { ...emptyBook(), employees: [{ ...hire(emptyBook(), 'BEAR', 'dev', 'builder', 0).employee, tokens: t }, { ...hire(emptyBook(), 'OWL', 'research', 'Explore', 0).employee, tokens: 'bad' }],
+    log: [{ ...rec, tokens: t, reviewTokens: { output: 'x' } }] }
+  const back = migrate(JSON.parse(JSON.stringify(stored))) as HrBook
+  expect(back.employees[0]?.tokens).toEqual(t)
+  expect(back.employees[0]?.tokenJobs).toBe(1)
+
+  // 한 건 평균은 토큰을 센 일로만 낸다(토큰 전에 끝낸 일 4건은 빼고), 센 일이 없으면 평균을 적지 않는다
+  const vet = { ...hire(emptyBook(), 'BEAR', 'dev', 'builder', 0).employee, jobs: 5, done: 5, tokens: t, tokenJobs: 1 }
+  expect(cardOf({ ...emptyBook(), employees: [vet] }, vet, 0)).toContain('· 한 건 평균 12.3k')
+  const odd = { ...vet, tokenJobs: undefined }
+  expect(cardOf({ ...emptyBook(), employees: [odd] }, odd, 0)).not.toContain('한 건 평균')
+  expect('tokens' in (back.employees[1] ?? {})).toBe(false)
+  expect(back.log[0]?.tokens).toEqual(t)
+  expect(back.log[0]?.reviewTokens).toBeUndefined()
+})
+
+test('토큰: 일하며 부른 모델의 토큰을 패널 줄에 보이고, 끝나면 그 일·직원 누적·결재 토큰으로 명부·인사카드·보고서에 남긴다', async ($, on) => {
+  const store = new Map<string, unknown>()
+  on('store.get', (_$, e) => ({ value: store.get(e.key) }))
+  on('store.set', (_$, e) => {
+    store.set(e.key, e.value)
+    return { value: undefined }
+  })
+  on('clock.now', () => ({ value: 5000 }))
+  on('agent.spawn', () => ({ model: 'm', agentId: 'c1' }))
+  let status: 'running' | 'completed' = 'running'
+  on('agent.list', () => ({ value: [{ id: 'c1', description: '고치기', type: 'builder', status }] }))
+  on('ui.toast', () => ({ value: undefined }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('model.complete', () => ({ value: { isAnswered: true, text: '승인', usage: { input_tokens: 400, output_tokens: 100, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } } }) as never)
+  on('tool.call', (_$, e) => {
+    if (e.tool === 'Agent') return { result: { status: 'completed', agentId: 'c1', content: [{ type: 'text', text: '고쳤습니다' }] } } as never
+    return { result: 'ok' }
+  })
+  on('turn.complete', () => ({ text: '' }))
+  const usage = { input_tokens: 1000, output_tokens: 500, cache_read_input_tokens: 8000, cache_creation_input_tokens: 500, model: 'm' }
+  on('turn.step', async function* (_$, e) {
+    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn', usage }
+  })
+  const step = async (agentId?: string) => {
+    const s = $.turn.step({ turnId: 's', index: 0, model: 'm', messageCount: 1, ...(agentId === undefined ? {} : { agentId }) })
+    let r = await s.next()
+    while (r.done !== true) r = await s.next()
+    return r.value
+  }
+
+  await $.agent.spawn({ tool_use_id: 't9', prompt: '버그를 고쳐', description: '고치기', subagentType: 'builder', ...SPAWN })
+  await $.command.run({ command: 'office', args: '', ...RUN })
+  expect((await step('c1')).usage).toEqual(usage)
+  await step('c1')
+  await step()
+  const ui = await $.ui.mount({ plugin: 'agent-office', surface: 'terminal', component: 'Pane', requestId: 'agent-office', props: PROPS, viewport: { columns: 96, rows: 50 } })
+  expect((await ui.find({ key: 'row-c1' }))?.text).toContain('도구 0회 · 토큰 20.0k')
+  expect((await ui.find({ key: 'row-main' }))?.text).toContain('토큰 10.0k')
+
+  for (const f of ['a', 'b', 'c']) await $.tool.call({ tool: 'Read', file_path: `/r/${f}.ts`, agentId: 'c1' } as never)
+  status = 'completed'
+  await $.turn.complete({ answer: '고쳤습니다', durationMs: 1, isAborted: false, turnId: 'z', agentId: 'c1', reason: 'answer' })
+  await $.tool.call({ tool: 'Agent', description: '고치기', prompt: '버그를 고쳐', subagent_type: 'builder' } as never)
+  await $.tool.call({ tool: 'Read', file_path: '/r/x.ts' } as never)
+
+  expect(JSON.stringify(await $.command.run({ command: 'office', args: 'hr', ...RUN }))).toContain('· 토큰 20.0k · 경력')
+  const card = JSON.stringify(await $.command.run({ command: 'office', args: 'hr BEAR', ...RUN }))
+  expect(card).toContain('토큰 누적 20.0k(입력 2.0k · 출력 1.0k · 캐시 읽기 16.0k · 캐시 쓰기 1.0k) · 한 건 평균 20.0k')
+  expect(card).toContain('· 토큰 20.0k')
+  const report = JSON.stringify(await $.command.run({ command: 'office', args: 'report', ...RUN }))
+  expect(report).toContain('토큰: 업무 20.0k · 결재 500(입력·출력·캐시를 모두 더함)')
+  expect(report).toContain('토큰 20.0k')
+  expect(report).toContain('토큰을 많이 쓴 직원: BEAR 20.0k(1건, 한 건 20.0k)')
 })

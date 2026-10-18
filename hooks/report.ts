@@ -6,6 +6,7 @@ import { REJECT_PENALTY } from './approval'
 import { CONTROL_EVERY, effectText } from './trial'
 import { accuracyLines } from './org'
 import { koNick } from './scene'
+import { tokenDetail, tokenText, totalOf } from './tokens'
 
 const HOUR_MS = 60 * 60_000
 const DAY_MS = 24 * HOUR_MS
@@ -83,7 +84,10 @@ export function reportOf(book: HrBook, period: Period, now: number): string {
   }
   const worked = list.reduce((s, r) => s + Math.max(0, r.endedAt - r.startedAt), 0)
   const cost = list.reduce((s, r) => s + costOf(book, r), 0)
+  const used = list.reduce((s, r) => s + totalOf(r.tokens), 0)
+  const reviewed = list.reduce((s, r) => s + totalOf(r.reviewTokens), 0)
   lines.push(`전체: 업무 ${tally(list)} · 근무 ${durationText(worked)} · 인건비 약 ${won(cost)}원(연봉을 시급으로 환산)`)
+  if (used + reviewed > 0) lines.push(`토큰: 업무 ${tokenText(used)}${reviewed > 0 ? ` · 결재 ${tokenText(reviewed)}` : ''}(입력·출력·캐시를 모두 더함)`)
   const decided = (a: JobRecord['approval']) => list.filter(r => r.approval === a).length
   if (list.some(r => r.approval !== undefined)) lines.push(`결재: 승인 ${decided('approved')} · 반려 ${decided('rejected')} · 전결 ${decided('exempt')}`)
 
@@ -93,7 +97,8 @@ export function reportOf(book: HrBook, period: Period, now: number): string {
     if (mine.length === 0) continue
     const sum = (f: (r: JobRecord) => number) => mine.reduce((s, r) => s + f(r), 0)
     const counts: [string, number][] = [['재작업', sum(r => (r.isReworked ? 1 : 0))], ['테스트 실패 완료', sum(r => (r.isCheckFailed ? 1 : 0))], ['근태 알림', sum(r => r.alarms)], ['결재 반려', sum(r => (r.approval === 'rejected' ? 1 : 0))]]
-    const extra = [`도구 오류 ${sum(r => r.errors)}`, ...counts.filter(([, n]) => n > 0).map(([k, n]) => `${k} ${n}`)]
+    const spent = sum(r => totalOf(r.tokens))
+    const extra = [`도구 오류 ${sum(r => r.errors)}`, ...counts.filter(([, n]) => n > 0).map(([k, n]) => `${k} ${n}`), ...(spent > 0 ? [`토큰 ${tokenText(spent)}`] : [])]
     lines.push(`  ${DEPT_INFO[d].ko}: ${tally(mine)} · ${extra.join(' · ')}`)
   }
 
@@ -107,6 +112,12 @@ export function reportOf(book: HrBook, period: Period, now: number): string {
     const e = book.employees.find(x => x.nick === mvp.nick)
     lines.push('', `MVP: ${mvp.nick} ${koNick(mvp.nick)}${e === undefined ? '' : ` ${rankOf(e.xp).ko}`} (${mvp.n}건, 평가 합계 ${signed(mvp.total)})`)
   }
+
+  // 토큰을 많이 쓴 직원(세 명까지): 한 건 평균도 함께(토큰을 센 일로만)
+  const spenders = [...byNick].map(([nick, rs]) => rs.filter(r => totalOf(r.tokens) > 0))
+    .map(rs => ({ nick: rs[0]?.nick ?? '', n: rs.length, total: rs.reduce((s, r) => s + totalOf(r.tokens), 0) }))
+    .filter(x => x.total > 0).sort((a, b) => b.total - a.total || (a.nick < b.nick ? -1 : 1)).slice(0, 3)
+  if (spenders.length > 0) lines.push(`토큰을 많이 쓴 직원: ${spenders.map(x => `${x.nick} ${tokenText(x.total)}(${x.n}건, 한 건 ${tokenText(x.total / x.n)})`).join(' · ')}`)
 
   const accuracy = accuracyLines(book, now)
   if (accuracy.length > 0) lines.push('', ...accuracy)
@@ -148,12 +159,15 @@ export function cardOf(book: HrBook, e: Employee | Retiree, now: number): string
     `도구 오류 ${e.toolErrors} · 재작업 ${e.reworks} · 근태 알림 ${e.alarms} · 결재 반려 ${e.rejections}`,
     `입사 ${agoText(e.hiredAt, now)}${e.lastAt === null ? '' : ` · 마지막 업무 ${agoText(e.lastAt, now)}`}`,
   )
+  // 한 건 평균은 토큰을 센 업무로만 낸다(토큰을 세기 전에 끝낸 일은 빼고)
+  const counted = e.tokenJobs ?? 0
+  if (e.tokens !== undefined && totalOf(e.tokens) > 0) lines.push(`토큰 누적 ${tokenDetail(e.tokens)}${counted > 0 ? ` · 한 건 평균 ${tokenText(totalOf(e.tokens) / counted)}` : ''}`)
   const recent = book.log.filter(r => r.nick === e.nick).slice(0, 5)
   if (recent.length > 0) {
     lines.push('', '최근 업무:')
     for (const r of recent) {
       const flaws = flawsOf(r).filter(f => f !== OUTCOME_KO[r.outcome])
-      lines.push(`  - ${agoText(r.endedAt, now)} ${r.description || '(설명 없음)'} · ${OUTCOME_KO[r.outcome]} ${gradeOf(r.score)}(${signed(r.score)}) · ${durationText(r.endedAt - r.startedAt)}${r.errors > 0 ? ` · 도구 오류 ${r.errors}` : ''}${flaws.length > 0 ? ` · ${flaws.join(' · ')}` : ''}`)
+      lines.push(`  - ${agoText(r.endedAt, now)} ${r.description || '(설명 없음)'} · ${OUTCOME_KO[r.outcome]} ${gradeOf(r.score)}(${signed(r.score)}) · ${durationText(r.endedAt - r.startedAt)}${r.errors > 0 ? ` · 도구 오류 ${r.errors}` : ''}${totalOf(r.tokens) > 0 ? ` · 토큰 ${tokenText(totalOf(r.tokens))}` : ''}${flaws.length > 0 ? ` · ${flaws.join(' · ')}` : ''}`)
     }
   }
   const lessons = lessonsFor(book, e.dept, now)
@@ -179,7 +193,7 @@ export function rosterText(b: HrBook, now: number): string {
     lines.push('', `${DEPT_INFO[d].ko}${lead === undefined ? '' : ` — 팀장 ${lead.nick}(${koNick(lead.nick)})`}`)
     for (const e of staffList) {
       const grade = e.lastScore === null ? '-' : gradeOf(e.lastScore)
-      lines.push(`  ${e.nick} ${koNick(e.nick)} · ${rankOf(e.xp).ko} · 연봉 ${won(salaryOf(b, e))}만원 · 최근 평가 ${grade} · 완료 ${e.done} / 실패 ${e.failed} · 도구 오류 ${e.toolErrors}${e.reworks > 0 ? ` · 재작업 ${e.reworks}` : ''}${e.alarms > 0 ? ` · 근태 알림 ${e.alarms}` : ''}${e.rejections > 0 ? ` · 결재 반려 ${e.rejections}` : ''} · 경력 ${e.xp}`)
+      lines.push(`  ${e.nick} ${koNick(e.nick)} · ${rankOf(e.xp).ko} · 연봉 ${won(salaryOf(b, e))}만원 · 최근 평가 ${grade} · 완료 ${e.done} / 실패 ${e.failed} · 도구 오류 ${e.toolErrors}${e.reworks > 0 ? ` · 재작업 ${e.reworks}` : ''}${e.alarms > 0 ? ` · 근태 알림 ${e.alarms}` : ''}${e.rejections > 0 ? ` · 결재 반려 ${e.rejections}` : ''}${totalOf(e.tokens) > 0 ? ` · 토큰 ${tokenText(totalOf(e.tokens))}` : ''} · 경력 ${e.xp}`)
     }
   }
   if (b.retired.length > 0) {

@@ -2,6 +2,7 @@
 // 평가는 실제 기록(완료·실패·도구 오류·거절)으로만 매기고, 부서가 반복한 실수는 "교훈"으로 모아
 // 다음에 그 부서 직원이 일을 맡을 때 업무 지시 끝에 짧은 인사 메모로 붙인다. 순수 함수만 둔다.
 import type { Approval, Dept, Employee, Handoff, HrBook, JobRecord, Lesson, Retiree } from '../types'
+import { tokensOf } from './tokens'
 
 export const DEPTS: Dept[] = ['dev', 'research', 'qa', 'plan', 'docs', 'ops']
 
@@ -93,9 +94,10 @@ export function migrate(stored: unknown): HrBook | null {
   const num = (x: unknown, or: number): number => (typeof x === 'number' && Number.isFinite(x) ? x : or)
   const numOrNull = (x: unknown): number | null => (typeof x === 'number' && Number.isFinite(x) ? x : null)
   const isDept = (x: unknown): x is Dept => DEPTS.includes(x as Dept)
-  const employeeOf = (e: Record<string, unknown>): Employee => ({
+  const employeeOf = ({ tokens, tokenJobs, ...e }: Record<string, unknown>): Employee => ({
     // 더 새로운 판이 둔 칸은 그대로 남긴다
     ...(e as object),
+    ...(tokensOf(tokens) === undefined ? {} : { tokens: tokensOf(tokens), tokenJobs: Math.max(1, Math.floor(num(tokenJobs, 1))) }),
     nick: e.nick as string, dept: isDept(e.dept) ? e.dept : 'ops', type: typeof e.type === 'string' ? e.type : 'agent',
     xp: num(e.xp, 0), jobs: num(e.jobs, 0), done: num(e.done, 0), failed: num(e.failed, 0), toolErrors: num(e.toolErrors, 0),
     reworks: num(e.reworks, 0), alarms: num(e.alarms, 0), rejections: num(e.rejections, 0), avgScore: numOrNull(e.avgScore), lastScore: numOrNull(e.lastScore), hiredAt: num(e.hiredAt, 0), lastAt: numOrNull(e.lastAt),
@@ -131,11 +133,14 @@ export function migrate(stored: unknown): HrBook | null {
     typeof x?.nick === 'string' && isNum(x.job) && isNum(x.startedAt) && isNum(x.endedAt) && isNum(x.score)
     && (x.outcome === 'done' || x.outcome === 'failed' || x.outcome === 'killed'))
     .map(x => {
-      const { salary, approval, approver, files, isFollowedUp, isWaived, ...rest } = x
+      const { salary, approval, approver, files, isFollowedUp, isWaived, tokens, reviewTokens, ...rest } = x
+      const used = tokensOf(tokens)
+      const reviewed = tokensOf(reviewTokens)
       const isApproval = approval === 'approved' || approval === 'rejected' || approval === 'exempt'
       return { ...rest, ...(isApproval ? { approval } : {}), dept: isDept(x.dept) ? x.dept : 'ops', description: typeof x.description === 'string' ? x.description : '', errors: num(x.errors, 0),
         isCheckFailed: x.isCheckFailed === true, isReworked: x.isReworked === true, alarms: num(x.alarms, 0), ...(isNum(salary) ? { salary } : {}),
-        ...(typeof approver === 'string' ? { approver } : {}), ...(isNum(files) ? { files } : {}), ...(isFollowedUp === true ? { isFollowedUp } : {}), ...(isWaived === true ? { isWaived } : {}) }
+        ...(typeof approver === 'string' ? { approver } : {}), ...(isNum(files) ? { files } : {}), ...(isFollowedUp === true ? { isFollowedUp } : {}), ...(isWaived === true ? { isWaived } : {}),
+        ...(used === undefined ? {} : { tokens: used }), ...(reviewed === undefined ? {} : { reviewTokens: reviewed }) }
     })
     .slice(0, MAX_LOG)
   return {

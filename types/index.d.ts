@@ -45,7 +45,12 @@ export type OfficeAgent = {
   alarms?: number
   /** 머리 위 말풍선(잠깐 뜬다) */
   say?: Bubble
+  /** 이번 일(메인은 이 세션)에서 모델을 부르며 쓴 토큰 */
+  tokens?: TokenUse
 }
+
+/** 모델 호출이 쓴 토큰: 입력(캐시 안 된 것)·출력·캐시 읽기·캐시 쓰기 */
+export type TokenUse = { input: number; output: number; cacheRead: number; cacheWrite: number }
 
 /** 평면도 머리 위 말풍선: 영문 짧은 말, 그 말을 한 때, 말투(혼잣말·대화·실수·좋은 소식) */
 export type Bubble = { text: string; at: number; tone: 'self' | 'talk' | 'bad' | 'good' }
@@ -82,6 +87,10 @@ export type Employee = {
   lastScore: number | null
   hiredAt: number
   lastAt: number | null
+  /** 지금까지 일하며 쓴 토큰(예전 기록에는 없다) */
+  tokens?: TokenUse
+  /** 토큰을 센 업무 수(한 건 평균을 낼 때: 토큰을 세기 전에 끝낸 일은 빼고) */
+  tokenJobs?: number
 }
 
 /** 부서가 반복한 도구 오류(같은 도구·같은 문구끼리 센다) */
@@ -147,6 +156,10 @@ export type JobRecord = {
   isFollowedUp?: boolean
   /** 반려됐지만 그 결재자의 반려가 자주 빗나가 감점하지 않았는지 */
   isWaived?: boolean
+  /** 그 일을 하며 쓴 토큰 */
+  tokens?: TokenUse
+  /** 결재자가 그 일을 결재하며 쓴 토큰 */
+  reviewTokens?: TokenUse
 }
 
 /** 회사를 떠난 직원: 그때의 인사 기록과 떠난 때·까닭 */

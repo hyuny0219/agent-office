@@ -9,7 +9,8 @@ import { enroll, errorLessonKey, markHit } from './trial'
 import { activityOf, layoutOf } from './scene'
 import { answer, COMMAND } from './commands'
 import { awaitApproval, checkFollowUp, checkRework, EDIT_TOOLS, fileOf, isCheckCommand, papers, reorganize, reviewPlan, syncStatus, takeNotes, watch } from './flow'
-import { admit, agentsOf, ensure, fresh, hold, hrOf, MEET_MS, meet, nickOfId, patch, readFeed, release, save, saveHr, speak, staff, watchAgents } from './store'
+import { usageOf } from './tokens'
+import { admit, agentsOf, chargeAgent, ensure, fresh, hold, hrOf, MEET_MS, meet, nickOfId, patch, readFeed, release, save, saveHr, speak, staff, watchAgents } from './store'
 import { cellsOf, dropOffice, feedRowsOf, FRAME_MS, markPaneShown, officeAt, RASTER, rowsOf, tick } from './view'
 
 const PANE = 'agent-office'
@@ -86,6 +87,13 @@ export const register: Register = (on, options) => {
     await ensure($, id)
     await save($, patch(id, a => ({ ...a, activity: 'think', endedAt: id === 'main' ? null : a.endedAt })))
     return next(e)
+  })
+
+  // 모델을 부를 때마다 그 에이전트가 쓴 토큰을 더한다(기록이 실패해도 응답은 그대로 넘긴다)
+  on('turn.step', async function* ($, e, next) {
+    const step = yield* next(e)
+    if (step.usage != null) await chargeAgent($, e.agentId ?? 'main', usageOf(step.usage)).catch(() => undefined)
+    return step
   })
 
   on('turn.complete', async ($, e, next) => {

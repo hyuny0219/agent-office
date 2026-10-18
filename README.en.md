@@ -37,10 +37,10 @@ In the desktop app, where `/plugin` does not run: click + next to the prompt box
 | --- | --- |
 | `/office` | Open the office floor plan pane |
 | `/office hr` | HR records: staff, rank, salary, latest review, done/failed, tool errors, reworks and attendance alerts by department, plus each department's repeated mistakes |
-| `/office hr <nick>` | One employee's personnel card: rank and experience to the next rank, salary breakdown, record, last 5 jobs, the department's repeated mistakes (`bear` or the Korean name both work, former employees too) |
+| `/office hr <nick>` | One employee's personnel card: rank and experience to the next rank, salary breakdown, record, token total, last 5 jobs, the department's repeated mistakes (`bear` or the Korean name both work, former employees too) |
 | `/office approval on` / `off` | Turn approvals on or off (on by default): team leads sign off finished jobs' reports, and the planning lead reviews confirmed plans |
 | `/office reorg on` / `off` | Turn reorganization on or off (on by default): employees with persistently poor reviews are asked to resign, and long-idle ones see their contracts end |
-| `/office report [today\|week]` | Daily (last 24 hours, the default) or weekly (last 7 days) report: totals and per-department results, hours worked and labor cost, approval counts and each approver's accuracy, MVP, and jobs to look at (failed, finished with failing tests, reworked, attendance alerts, rejected) |
+| `/office report [today\|week]` | Daily (last 24 hours, the default) or weekly (last 7 days) report: totals and per-department results, hours worked and labor cost, token usage (per department and top spenders), approval counts and each approver's accuracy, MVP, and jobs to look at (failed, finished with failing tests, reworked, attendance alerts, rejected) |
 | `/office hr on` / `off` | Turn the HR memo in task briefs and the attendance notices on or off (on by default) |
 | `/office hr ab on` / `off` | Turn training-effect measurement (a control group that gets no mistake list) on or off (on by default) |
 
@@ -132,6 +132,10 @@ Departures are announced with a toast and in the messenger (from HR), and stay i
 
 `/office report` is built from the log of finished jobs (the latest 300). The mod doesn't know your time zone, so "today" means the last 24 hours and "week" the last 7 days. Labor cost is a playful number: each employee's current salary turned into an hourly rate (40 hours × 52 weeks) times the time the job took.
 
+### Token usage
+
+Every time an agent calls the model, the usage the engine reports (input, output, cache reads, cache writes) is added to that agent. The pane row shows the current job's tokens (BOSS shows this session's), and when a job ends its tokens go into the job record and the employee's running total, shown in `/office hr` (total), `/office hr <nick>` (the four parts, average per job, per recent job) and `/office report` (overall, per department, top three spenders). Tokens an approver spends reviewing a job are counted separately as "approval". The number shown adds all four parts, so cache reads make up much of it (they are cheap, so this is not the cost). BOSS's tokens appear only in the pane, not in HR records. Plan reviews belong to no job and aren't counted, neither are steps of an agent that continues after it ended, and jobs finished before this feature have no tokens.
+
 ### Measuring the training effect
 
 The office checks whether the mistake list in the memo actually prevents repeats.
@@ -156,7 +160,7 @@ claude plugin test .
 claude --plugin-dir .
 ```
 
-`hooks/register.tsx` only wires engine events; the work is split up: `store.ts` (state and persistence), `flow.ts` (sync, reviews, approvals, attendance, reorganization), `view.ts` (pane rows, painting the floor plan), `commands.ts` (`/office` text answers). Decisions live in pure modules: `hr.ts` (HR), `org.ts` (assignment, approval accuracy, reorganization), `approval.ts` (approvals), `speech.ts` (chatter), `report.ts` (reports, roster, personnel cards), `trial.ts` (training effect), `watch.ts` (attendance), `scene.ts` (floor plan).
+`hooks/register.tsx` only wires engine events; the work is split up: `store.ts` (state and persistence), `flow.ts` (sync, reviews, approvals, attendance, reorganization), `view.ts` (pane rows, painting the floor plan), `commands.ts` (`/office` text answers). Decisions live in pure modules: `hr.ts` (HR), `org.ts` (assignment, approval accuracy, reorganization), `approval.ts` (approvals), `speech.ts` (chatter), `report.ts` (reports, roster, personnel cards), `tokens.ts` (token usage), `trial.ts` (training effect), `watch.ts` (attendance), `scene.ts` (floor plan).
 
 The README screenshots (`docs/office.png`, `docs/office.gif`) are made by running `hooks/scene.ts` itself (needs Pillow):
 

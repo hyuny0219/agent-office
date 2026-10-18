@@ -3,11 +3,12 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface } from 'claude-code'
 
-import type { Bubble, HrBook, OfficeAgent, Utterance } from '../types'
+import type { Bubble, HrBook, OfficeAgent, TokenUse, Utterance } from '../types'
 import { assign, DEPTS, deptOf, emptyBook, hire, leadOf, migrate } from './hr'
 import { pickFor } from './org'
 import type { Assignment } from './org'
 import { pushLine } from './speech'
+import { addTokens, totalOf } from './tokens'
 import { nickFor } from './scene'
 import type { Leads } from './scene'
 
@@ -104,6 +105,13 @@ export const meet = (ids: [string, string], until: number) => (list: OfficeAgent
 export async function speak($: EngineInterface, id: string | null, bubble: Bubble | null, line: Utterance | null = null) {
   if (id !== null && bubble !== null) await save($, patch(id, a => ({ ...a, say: bubble })))
   if (line !== null) await update($, feedAtom, f => pushLine(f, line))
+}
+
+/** 그 에이전트가 모델을 부르며 쓴 토큰을 더한다. 사무실에 없거나 이미 끝난(평가에 넘긴) 직원이면 버린다(목록과 인사 기록이 어긋나지 않도록) */
+export async function chargeAgent($: EngineInterface, id: string, t: TokenUse) {
+  const a = (await agentsOf($)).find(x => x.id === id)
+  if (totalOf(t) === 0 || a === undefined || (id !== 'main' && a.endedAt !== null)) return
+  await save($, patch(id, a => ({ ...a, tokens: addTokens(a.tokens, t) })))
 }
 
 export async function nickOfId($: EngineInterface, id: string): Promise<string> {
