@@ -110,11 +110,14 @@ export async function speak($: EngineInterface, id: string | null, bubble: Bubbl
   if (line !== null) await update($, feedAtom, f => pushLine(f, line))
 }
 
-/** 그 에이전트가 모델을 부르며 쓴 토큰을 더한다. 사무실에 없거나 이미 끝난(평가에 넘긴) 직원이면 버린다(목록과 인사 기록이 어긋나지 않도록) */
-export async function chargeAgent($: EngineInterface, id: string, t: TokenUse) {
+/**
+ * 그 에이전트가 모델을 부르며 쓴 토큰을 더하고, 그때 답한 모델을 적는다(띄울 때 정한 별칭보다 정확하다).
+ * 사무실에 없거나 이미 끝난(평가에 넘긴) 직원이면 버린다(목록과 인사 기록이 어긋나지 않도록)
+ */
+export async function chargeAgent($: EngineInterface, id: string, t: TokenUse, model: string | null = null) {
   const a = (await agentsOf($)).find(x => x.id === id)
   if (totalOf(t) === 0 || a === undefined || (id !== 'main' && a.endedAt !== null)) return
-  await save($, patch(id, a => ({ ...a, tokens: addTokens(a.tokens, t) })))
+  await save($, patch(id, a => ({ ...a, tokens: addTokens(a.tokens, t), ...(model === null || model === '' ? {} : { model }) })))
 }
 
 export async function nickOfId($: EngineInterface, id: string): Promise<string> {

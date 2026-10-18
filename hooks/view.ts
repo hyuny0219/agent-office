@@ -9,7 +9,7 @@ import { ERROR_STREAK, isOvertime, REPEAT_STREAK } from './watch'
 import { encodeCells, isMeeting, koNick, Office, seated, shortType } from './scene'
 import type { Layout } from './scene'
 import { syncStatus } from './flow'
-import { totalOf, useText } from './tokens'
+import { costText, modelLabel, totalOf, useText } from './tokens'
 import { agentsOf, hrOf, leadsOf } from './store'
 
 export const RASTER = 'office'
@@ -33,27 +33,75 @@ const streakMax = (a: OfficeAgent): number => Math.max(0, ...Object.values(a.err
 
 export type Row = { key: string; text: string; isOff: boolean; isBad: boolean }
 
-/** 패널 목록: 앉은 순서대로 10명, 한 사람에 한 줄(누구·어디서 무엇을·말풍선·도구·근태·걸린 시간·맡은 일) */
-export function rowsOf(agents: readonly OfficeAgent[], b: HrBook, now: number): Row[] {
+/** 터미널에서 차지하는 칸 수(한글·한자·전각·이모지는 두 칸) */
+export function widthOf(s: string): number {
+  let n = 0
+  for (const ch of s) {
+    const c = ch.codePointAt(0) ?? 0
+    n += (c >= 0x1100 && c <= 0x115f) || (c >= 0x2e80 && c <= 0xa4cf) || (c >= 0xac00 && c <= 0xd7a3)
+      || (c >= 0xf900 && c <= 0xfaff) || (c >= 0xfe30 && c <= 0xfe4f) || (c >= 0xff00 && c <= 0xff60) || (c >= 0xffe0 && c <= 0xffe6) || (c >= 0x1f300 && c <= 0x1faff) ? 2 : 1
+  }
+  return n
+}
+
+/** 맡은 일 설명에 적어도 남겨 둘 칸(줄이 길면 끝이 잘린다) */
+const DESC_KEEP = 16
+
+/**
+ * 한 줄의 칸들. 줄이 폭을 넘으면 덜 중요한 것부터 짧게 하거나 뺀다:
+ * 말풍선 인용 → 도구 수 → 걸린 시간 → 토큰(비용만 남김) → 한글 별명 → 오류 수 → 비용 → 모델.
+ * 누구·어디서·근태 경고·맡은 일은 늘 남긴다.
+ */
+type Part = { key: string; full: string; short?: string }
+const SHRINK: { key: string; to: 'short' | 'drop' }[] = [
+  { key: 'talk', to: 'drop' }, { key: 'tools', to: 'drop' }, { key: 'mins', to: 'drop' }, { key: 'used', to: 'short' },
+  { key: 'who', to: 'short' }, { key: 'errs', to: 'drop' }, { key: 'used', to: 'drop' }, { key: 'model', to: 'drop' },
+]
+
+/** 칸들을 폭에 맞춘다(맡은 일은 맨 끝이라 남은 칸만큼 보이고 나머지는 화면이 자른다) */
+export function fitParts(parts: readonly Part[], desc: string, columns: number): string {
+  const state = new Map(parts.map(p => [p.key, p.full]))
+  const join = () => [...parts.map(p => state.get(p.key) ?? ''), desc].filter(x => x !== '').join(' · ')
+  const room = columns - Math.min(widthOf(desc), DESC_KEEP)
+  for (const step of SHRINK) {
+    if (widthOf(join()) - widthOf(desc) <= room) break
+    const part = parts.find(p => p.key === step.key)
+    if (part === undefined || state.get(step.key) === '') continue
+    state.set(step.key, step.to === 'drop' ? '' : (part.short ?? part.full))
+  }
+  return join()
+}
+
+/** 패널 목록: 앉은 순서대로 10명, 한 사람에 한 줄(누구·어디서 무엇을·모델·말풍선·도구·근태·걸린 시간·맡은 일), 폭에 맞춰 줄인다 */
+export function rowsOf(agents: readonly OfficeAgent[], b: HrBook, now: number, columns = Infinity): Row[] {
   return seated(agents).slice(0, 10).map(a => {
     const emp = b.employees.find(x => x.nick === a.nick)
     const isLead = a.dept !== undefined && leadOf(b, a.dept)?.nick === a.nick
-    const who = a.id === 'main'
-      ? `${koNick(a.nick)} 대표`
-      : `${koNick(a.nick)} ${emp === undefined ? '사원' : rankOf(emp.xp).ko}${isLead ? '·팀장' : ''} (${a.dept === undefined ? shortType(a.type) : DEPT_INFO[a.dept].ko})`
+    const title = a.id === 'main' ? '대표'
+      : `${emp === undefined ? '사원' : rankOf(emp.xp).ko}${isLead ? '·팀장' : ''} (${a.dept === undefined ? shortType(a.type) : DEPT_INFO[a.dept].ko})`
     const where = isMeeting(a, now) ? `회의실${a.meetWith ? `: ${withGwa(koNick(a.meetWith))} 대화` : ''}`
       : a.activity === 'type' || a.activity === 'web' || a.activity === 'read' || a.activity === 'bash' ? `${STATUS_WORD[a.activity]} ${a.tool ?? ''}`.trim()
       : STATUS_WORD[a.activity]
     const mins = Math.floor(((a.endedAt ?? now) - a.startedAt) / 60_000)
-    const errs = a.errors ? ` · 오류 ${a.errors}` : ''
-    const used = a.tokens !== undefined && totalOf(a.tokens) > 0 ? ` · 토큰 ${useText(a.tokens)}` : ''
+    const hasTokens = a.tokens !== undefined && totalOf(a.tokens) > 0
     const signs = [
       streakMax(a) >= ERROR_STREAK ? `같은 실수 ${streakMax(a)}연속` : null,
       (a.callStreak?.count ?? 0) >= REPEAT_STREAK ? '제자리걸음' : null,
       isOvertime(a.startedAt, a.endedAt, now) && a.id !== 'main' ? '야근' : null,
-    ].filter(x => x !== null).map(x => ` · ${x}`).join('')
-    const talk = isSpeaking(a.say, now) ? ` · "${a.say.text}"` : ''
-    return { key: `row-${a.id}`, text: `${a.nick} ${who} · ${where}${talk} · 도구 ${a.tools}회${used}${errs}${signs} · ${mins}분 · ${a.description || '-'}`, isOff: a.endedAt !== null, isBad: a.activity === 'failed' }
+    ].filter(x => x !== null).join(' · ')
+    const parts: Part[] = [
+      { key: 'who', full: `${a.nick} ${koNick(a.nick)} ${title}`, short: `${a.nick} ${title}` },
+      { key: 'where', full: where },
+      { key: 'talk', full: isSpeaking(a.say, now) ? `"${a.say.text}"` : '' },
+      // 첫 답이 오기 전에는 띄울 때 받은 이름이다('inherit'는 모델 이름이 아니다)
+      { key: 'model', full: a.model === null || a.model === '' || a.model === 'inherit' ? '' : modelLabel(a.model) },
+      { key: 'tools', full: `도구 ${a.tools}회` },
+      { key: 'used', full: hasTokens && a.tokens !== undefined ? `토큰 ${useText(a.tokens)}` : '', short: hasTokens && a.tokens !== undefined && a.tokens.unpriced < totalOf(a.tokens) ? costText(a.tokens) : '' },
+      { key: 'errs', full: a.errors ? `오류 ${a.errors}` : '' },
+      { key: 'signs', full: signs },
+      { key: 'mins', full: `${mins}분` },
+    ]
+    return { key: `row-${a.id}`, text: fitParts(parts, a.description || '-', columns), isOff: a.endedAt !== null, isBad: a.activity === 'failed' }
   })
 }
 

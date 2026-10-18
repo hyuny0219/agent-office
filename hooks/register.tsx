@@ -93,7 +93,7 @@ export const register: Register = (on, options) => {
   // 모델을 부를 때마다 그 에이전트가 쓴 토큰을 더한다(기록이 실패해도 응답은 그대로 넘긴다)
   on('turn.step', async function* ($, e, next) {
     const step = yield* next(e)
-    if (step.usage != null) await chargeAgent($, e.agentId ?? 'main', usageOf(step.usage, step.usage.model)).catch(() => undefined)
+    if (step.usage != null) await chargeAgent($, e.agentId ?? 'main', usageOf(step.usage, step.usage.model), step.usage.model).catch(() => undefined)
     // 직원이 쓴 만큼 부서 예산을 본다(BOSS는 부서가 없다)
     if (step.usage != null && e.agentId !== undefined) await checkBudget($).catch(() => undefined)
     return step
@@ -204,7 +204,7 @@ export const register: Register = (on, options) => {
     const agents = await agentsOf($)
     const b = await hrOf($)
     const now = await $.clock.now()
-    const lines = rowsOf(agents, b, now)
+    const lines = rowsOf(agents, b, now, e.surface === 'terminal' ? (e.viewport?.columns ?? 80) - 2 : Infinity)
     const feedLines = feedRowsOf(feed, now)
 
     if (e.surface !== 'terminal') {

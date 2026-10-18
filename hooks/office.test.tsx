@@ -9,8 +9,9 @@ import { asciiOf, BUBBLE_MS, isSpeaking, lineText, messageOf, oopsOf, orderOf, p
 import { agoText, cardOf, durationText, findEmployee, jobsIn, reportOf } from './report'
 import { CONTROL_EVERY, effectText, enroll, markHit, MIN_CONTROL, MIN_MEMO, settle, verdictOf } from './trial'
 import { callKeyOf, errorKeyOf, isAlarm, isOvertime, isPolling, nudgeOf, OVERTIME_MS, stepOf } from './watch'
+import { fitParts, rowsOf, widthOf } from './view'
 import { activityOf, encodeCells, koNick, layoutOf, nickFor, Office, PLAN_ROWS } from './scene'
-import { addTokens, chargeReview, costText, priceOf, tokenDetail, tokensOf, tokenText, totalOf, usageOf, usdText } from './tokens'
+import { addTokens, chargeReview, costText, modelLabel, priceOf, tokenDetail, tokensOf, tokenText, totalOf, usageOf, usdText } from './tokens'
 import { BUDGET_MS, budgetLines, deptNamed, dollarsOf, noticed, overrunsOf, spentOf } from './budget'
 import { accuracyLines, accuracyOf, FOLLOW_MS, followUp, IDLE_MS, isRejectTrusted, isSimilar, judgeOf, pickFor, reinstate, reorgOf } from './org'
 
@@ -1060,6 +1061,35 @@ test('설정이 비어 있으면 다른 패널에 끼어들지 않는다', async
   expect(JSON.stringify(await ui.drawn())).not.toContain('Raster')
 })
 
+test('패널 줄: 모델을 짧게 적고, 폭이 모자라면 덜 중요한 칸부터 줄이며, 누구·어디서·맡은 일은 남긴다', () => {
+  expect(modelLabel('claude-opus-5-5-20261001')).toBe('Opus 5.5')
+  expect(modelLabel('claude-haiku-4-5@20251001')).toBe('Haiku 4.5')
+  expect(modelLabel('claude-fable-5-1[1m]')).toBe('Fable 5.1')
+  expect(modelLabel('claude-opus-5')).toBe('Opus 5')
+  expect(modelLabel('claude-3-5-sonnet-20241022')).toBe('Sonnet 3.5')
+  expect(modelLabel('sonnet')).toBe('Sonnet')
+  // 날짜를 버전으로 읽지 않고, 다른 이름 속 계열 낱말은 잡지 않는다
+  expect(modelLabel('claude-3-opus-20240229')).toBe('Opus 3')
+  expect(modelLabel('claude-opus-20261001')).toBe('Opus')
+  expect(modelLabel('claude-opus-5-10')).toBe('Opus 5.10')
+  expect(modelLabel('us.anthropic.claude-sonnet-4-5-20250929-v1:0')).toBe('Sonnet 4.5')
+  expect(modelLabel('magnumopus-7b')).toBe('magnumopus-7')
+  expect(widthOf('😀')).toBe(2)
+  expect(modelLabel('gpt-something-long')).toBe('gpt-somethin')
+  expect(widthOf('BEAR 곰')).toBe(7)
+  const tokens = { input: 15000, output: 5000, cacheRead: 0, cacheWrite: 0, usd: 0.08, unpriced: 0 }
+  const a = agent('a1', { model: 'claude-opus-5-5', tools: 12, errors: 2, tokens, description: '빌드 스크립트 정리하기', startedAt: 0 })
+  const b = emptyBook()
+  // 넓으면 다 보인다
+  expect(rowsOf([a], b, 180_000)[0]?.text).toBe('BEAR 곰 사원 (개발팀) · 작성 중 Edit · Opus 5.5 · 도구 12회 · 토큰 20.0k($0.08) · 오류 2 · 3분 · 빌드 스크립트 정리하기')
+  // 좁으면 도구 수·시간을 빼고 토큰은 비용만, 한글 별명을 빼고, 더 좁으면 오류·비용·모델 순으로 뺀다
+  expect(rowsOf([a], b, 180_000, 80)[0]?.text).toBe('BEAR 사원 (개발팀) · 작성 중 Edit · Opus 5.5 · $0.08 · 오류 2 · 빌드 스크립트 정리하기')
+  expect(rowsOf([a], b, 180_000, 64)[0]?.text).toBe('BEAR 사원 (개발팀) · 작성 중 Edit · Opus 5.5 · 빌드 스크립트 정리하기')
+  expect(rowsOf([a], b, 180_000, 30)[0]?.text).toBe('BEAR 사원 (개발팀) · 작성 중 Edit · 빌드 스크립트 정리하기')
+  // 근태 경고는 빼지 않는다
+  expect(fitParts([{ key: 'who', full: 'BEAR' }, { key: 'signs', full: '야근' }, { key: 'tools', full: '도구 9회' }], '일', 10)).toBe('BEAR · 야근 · 일')
+})
+
 test('토큰: 사용량 네 가지를 더하고 짧게 적으며, 저장된 값은 모양을 보고 읽고, 결재 토큰은 그 일 기록에 붙는다', () => {
   const t = usageOf({ input_tokens: 1200, output_tokens: 800, cache_read_input_tokens: 10_000, cache_creation_input_tokens: 300 }, 'claude-sonnet-5-5')
   // 소네트 5.5: 입력 $2·출력 $10·캐시 읽기 $0.20, 캐시 쓰기는 입력의 1.25배(백만 토큰당)
@@ -1153,7 +1183,8 @@ test('토큰: 일하며 부른 모델의 토큰을 패널 줄에 보이고, 끝�
   await step()
   const ui = await $.ui.mount({ plugin: 'agent-office', surface: 'terminal', component: 'Pane', requestId: 'agent-office', props: PROPS, viewport: { columns: 96, rows: 50 } })
   // 한 번에 $0.00985(입력 1000×$2 + 출력 500×$10 + 캐시 읽기 8000×$0.2 + 캐시 쓰기 500×$2.5, 백만 토큰당)
-  expect((await ui.find({ key: 'row-c1' }))?.text).toContain('도구 0회 · 토큰 20.0k($0.02)')
+  // 띄울 때 받은 모델('m') 대신 실제로 답한 모델을 짧게 보인다. 96칸에선 말풍선·도구 수를 빼고 들어간다
+  expect((await ui.find({ key: 'row-c1' }))?.text).toBe('BEAR 곰 사원 (개발팀) · 회의실: 보스와 대화 · Sonnet 5.5 · 토큰 20.0k($0.02) · 0분 · 고치기')
   expect((await ui.find({ key: 'row-main' }))?.text).toContain('토큰 10.0k($0.0098)')
 
   for (const f of ['a', 'b', 'c']) await $.tool.call({ tool: 'Read', file_path: `/r/${f}.ts`, agentId: 'c1' } as never)

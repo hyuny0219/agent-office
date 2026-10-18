@@ -43,6 +43,22 @@ export function priceOf(model: string): Price | null {
   return PRICES.find(([k]) => k === key)?.[1] ?? null
 }
 
+// 버전은 한두 자리만(뒤에 붙는 8자리 날짜를 버전으로 읽지 않도록), 계열 이름은 낱말 앞에서만
+const FAMILY = /(?:^|-)(fable|mythos|opus|sonnet|haiku)(?:-(\d{1,2})(?!\d)(?:-(\d{1,2})(?!\d))?)?/
+const OLD_FAMILY = /(?:^|-)(\d)(?:-(\d))?-(opus|sonnet|haiku)/
+
+/** 모델 이름을 짧게: claude-opus-5-5-20261001 → Opus 5.5, claude-3-5-haiku → Haiku 3.5, claude-3-opus → Opus 3, opus → Opus. 모르는 이름은 앞 12자 */
+export function modelLabel(model: string): string {
+  const m = model.toLowerCase().replace(/[.\s]/g, '-').replace(/^claude-/, '').replace(/\[.*\]$/, '')
+  const cap = (f: string) => f[0]?.toUpperCase() + f.slice(1)
+  const old = m.match(OLD_FAMILY)
+  if (old !== null) return `${cap(old[3] ?? '')} ${old[1]}${old[2] === undefined ? '' : `.${old[2]}`}`
+  const hit = m.match(FAMILY)
+  if (hit === null) return model.slice(0, 12)
+  const [, family = '', major, minor] = hit
+  return major === undefined ? cap(family) : `${cap(family)} ${major}${minor === undefined ? '' : `.${minor}`}`
+}
+
 /** 사용량을 그 모델 가격으로 어림한 달러 */
 export const usdOf = (t: TokenUse, p: Price): number =>
   (t.input * p.input + t.output * p.output + t.cacheRead * p.cacheRead + t.cacheWrite * p.input * CACHE_WRITE_RATE) / 1_000_000
