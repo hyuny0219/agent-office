@@ -76,6 +76,10 @@ test('인사: 평가 점수·등급, 경력으로 승진, 팀장은 경력 1위,
 test('교훈: 같은 오류를 묶어 세고, 두 번 이상이면 업무 지시 메모에 피하는 법과 함께 붙는다', () => {
   expect(patternOf('String to replace not found in file.\nString: foo')).toBe('String to replace not found in file.')
   expect(patternOf('ENOENT: no such file /Users/a/b.ts line 12')).toBe('ENOENT: no such file <경로> line #')
+  expect(patternOf('ENOENT: no such file C:\\Users\\a\\b.ts line 12')).toBe('ENOENT: no such file <경로> line #')
+  expect(tipOf(patternOf("grep : The term 'grep' is not recognized as a name of a cmdlet"))).toContain('Select-String')
+  expect(tipOf(patternOf("The token '&&' is not a valid statement separator in this version."))).toContain(';로')
+  expect(patternOf('Error:/tmp/x failed')).toBe('Error:<경로> failed')
   expect(tipOf('String to replace not found in file.')).toContain('Read')
   let b = hire(emptyBook(), 'BEAR', 'dev', 'builder', 1).book
   b = learn(b, 'dev', 'Edit', 'String to replace not found in file.', 5)
@@ -177,6 +181,7 @@ test('근태: 같은 것을 연달아 세고, 문턱과 그 배수마다 알리�
   expect(errorKeyOf('Bash', 'Exit code 1\nFAIL src/a.test.ts', { command: 'npm test' })).toBe('Bash|npm: FAIL src<경로>')
   expect(errorKeyOf('Bash', 'Exit code 1', { command: 'grep foo .' })).not.toBe(errorKeyOf('Bash', 'Exit code 1', { command: 'CI=1 npm test' }))
   expect(errorKeyOf('Bash', 'Exit code 1', { command: 'CI=1 npm test' })).toBe('Bash|npm: ')
+  expect(errorKeyOf('PowerShell', 'Exit code 1', { command: 'npm test' })).toBe('PowerShell|npm: ')
   const nudge = nudgeOf('error', 'Edit', { key: errorKeyOf('Edit', 'String to replace not found in file.'), count: 3 })
   expect(nudge).toContain('같은 오류가 3번 연달아')
   expect(nudge).toContain('Read로 다시 읽어')
@@ -316,6 +321,10 @@ test('사내 대화: 도구마다 짧은 영문 혼잣말, 설명 있는 명령�
   expect(messageOf('BEAR', 'OWL', { message: 'token 만료로 실패, password reset 메일' }, 0).line.text).toBe('token 만료로 실패, password reset 메일')
   expect(bash.line).toEqual({ at: 5, kind: 'self', from: 'BEAR', text: '테스트 돌려 보기' })
   expect(selfTalkOf('BEAR', { tool: 'Read', file_path: '/r/a.ts' }, 0).line).toBeNull()
+  // 윈도우: PowerShell도 Bash처럼 앞 낱말과 설명을 쓰고, 경로는 \\로도 자른다
+  const ps = selfTalkOf('BEAR', { tool: 'PowerShell', command: 'Get-ChildItem -Recurse', description: '파일 목록 보기' }, 5)
+  expect([ps.bubble.text, ps.line?.text]).toEqual(['$ Get-ChildIt~', '파일 목록 보기'])
+  expect(selfTalkOf('BEAR', { tool: 'Edit', file_path: 'C:\\r\\hooks\\hr.ts' }, 0).bubble.text).toBe('edit hr.ts')
   expect(selfTalkOf('OWL', { tool: 'mcp__claude_ai_Exa__web_search_exa' }, 0).bubble.text).toBe('web_search_exa')
   // 한글만 있으면 평면도에 못 그리니 대신할 말
   expect(asciiOf('한글 설명', '...')).toBe('...')

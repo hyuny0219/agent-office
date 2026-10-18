@@ -271,6 +271,8 @@ const TIPS: [RegExp, string][] = [
   [/modified since|changed on disk/i, '파일이 바뀌었으니 다시 Read한 뒤 고친다'],
   [/found \d+ matches|not unique|multiple matches/i, 'Edit의 old_string을 주변 줄까지 넣어 하나로 좁힌다'],
   [/no matches found/i, 'zsh 글롭은 따옴표로 감싸거나 일치 없음에 대비한다'],
+  // 윈도우 PowerShell: Bash 명령(grep·head·ls -la)이나 &&를 쓰면 이렇게 실패한다
+  [/is not recognized as|is not a valid statement separator|parameter cannot be found that matches/i, 'PowerShell에서는 Bash 명령 대신 Select-String·Get-ChildItem·Get-Content를 쓰고, 명령은 ;로 잇는다'],
   [/command not found/i, '명령 경로를 확인하고(node_modules/.bin 등) 그 경로로 부른다'],
   [/timed out|timeout/i, '오래 걸리는 명령은 범위를 줄이거나 백그라운드로 돌린다'],
   [/enoent|no such file|does not exist/i, '경로를 Glob·ls로 먼저 확인한다'],
@@ -278,10 +280,10 @@ const TIPS: [RegExp, string][] = [
   [/exit code [1-9]|failed/i, '명령이 실패하면 출력의 마지막 줄을 읽고 원인부터 고친다'],
 ]
 
-/** 오류 문구를 같은 종류끼리 묶을 수 있게 다듬는다(경로·숫자·따옴표 안 내용 제거) */
+/** 오류 문구를 같은 종류끼리 묶을 수 있게 다듬는다(경로·숫자·따옴표 안 내용 제거, 윈도우 경로 C:\a\b도) */
 export const patternOf = (text: string): string =>
   (text.split('\n').find(l => l.trim() !== '') ?? '')
-    .replace(/(\/[\w.@-]+)+/g, '<경로>')
+    .replace(/(\b[A-Za-z]:)?([\\/][\w.@-]+)+/g, '<경로>')
     .replace(/(["'`]).*?\1/g, '"…"')
     .replace(/\d+/g, '#')
     .trim()

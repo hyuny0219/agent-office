@@ -1,6 +1,7 @@
 // 사내 대화. 직원들이 일하며 하는 말을 만든다: 평면도 머리 위에 잠깐 뜨는 짧은 말풍선(영문, 평면도 글자는 영문뿐)과
 // 평면도 아래 사내 메신저에 남는 한 줄(한글). 지시·보고·메시지·혼잣말·실수·결재. 순수 함수만 둔다.
 import type { Bubble, Utterance, UtteranceKind } from '../types'
+import { isShell } from './watch'
 
 /** 말풍선이 떠 있는 시간 */
 export const BUBBLE_MS = 3500
@@ -10,7 +11,7 @@ export const BUBBLE_CHARS = 14
 export const FEED_MAX = 40
 const LINE_CHARS = 90
 
-const baseName = (f: string): string => f.split('/').pop() ?? f
+const baseName = (f: string): string => f.split(/[\\/]/).pop() ?? f
 /**
  * 화면에 보일 글을 다듬는다: 터미널 제어 문자(색·커서 이동)와 글 방향 뒤집기를 지우고,
  * 비밀처럼 보이는 값(토큰·키·암호·Authorization)은 가린다. 메신저는 다른 mod도 읽는 세션 상태다.
@@ -42,7 +43,7 @@ const said = (at: number, kind: UtteranceKind, from: string, text: string, to?: 
 const str = (x: unknown): string => (typeof x === 'string' ? x : '')
 
 /**
- * 도구를 부를 때 하는 혼잣말: 말풍선은 늘, 메신저 줄은 말로 된 설명이 있을 때만(Bash의 description 등).
+ * 도구를 부를 때 하는 혼잣말: 말풍선은 늘, 메신저 줄은 말로 된 설명이 있을 때만(Bash·PowerShell의 description).
  * 도구마다 무엇을 하는지 짧게.
  */
 export function selfTalkOf(nick: string, e: { tool: string } & object, at: number): { bubble: Bubble; line: Utterance | null } {
@@ -53,7 +54,7 @@ export function selfTalkOf(nick: string, e: { tool: string } & object, at: numbe
   let bubble: Bubble
   switch (e.tool) {
     // 명령은 앞 낱말만(인자에 비밀이 섞일 수 있다): 환경 변수 대입은 건너뛴다
-    case 'Bash': bubble = bub(`$ ${str(x.command).trim().split(/\s+/).find(w => !w.includes('=')) ?? ''}`); break
+    case 'Bash': case 'PowerShell': bubble = bub(`$ ${str(x.command).trim().split(/\s+/).find(w => !w.includes('=')) ?? ''}`); break
     case 'Edit': case 'Write': case 'NotebookEdit': bubble = bub(`edit ${file}`); break
     case 'Read': bubble = bub(`read ${file}`); break
     case 'Grep': bubble = bub(`grep ${str(x.pattern)}`); break
@@ -64,7 +65,7 @@ export function selfTalkOf(nick: string, e: { tool: string } & object, at: numbe
     default: bubble = bub(e.tool.startsWith('mcp__') ? (e.tool.split('__')[2] ?? 'mcp') : e.tool.toLowerCase())
   }
   // 말로 된 설명이 있는 도구만 메신저에 남긴다(모든 도구를 남기면 소음이다)
-  const line = e.tool === 'Bash' && desc.trim() !== '' ? said(at, 'self', nick, desc) : null
+  const line = isShell(e.tool) && desc.trim() !== '' ? said(at, 'self', nick, desc) : null
   return { bubble, line }
 }
 

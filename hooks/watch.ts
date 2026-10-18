@@ -37,12 +37,15 @@ export function callKeyOf(e: { tool: string } & object): string {
   return `${e.tool}|${hash(JSON.stringify(input))}`
 }
 
+/** 셸 명령 도구(맥·리눅스의 Bash, 윈도우의 PowerShell): 입력이 같은 모양(command·description)이다 */
+export const isShell = (tool: string): boolean => tool === 'Bash' || tool === 'PowerShell'
+
 /**
  * 오류의 열쇠: 같은 도구·같은 문구(경로·숫자를 지운)면 같은 실수.
- * Bash는 첫 줄이 늘 "Exit code N"이라 그 줄은 건너뛰고, 명령 이름까지 넣는다(grep 일치 없음과 테스트 실패는 다른 실수다).
+ * 셸 명령은 첫 줄이 늘 "Exit code N"이라 그 줄은 건너뛰고, 명령 이름까지 넣는다(grep 일치 없음과 테스트 실패는 다른 실수다).
  */
 export function errorKeyOf(tool: string, text: string, e: object = {}): string {
-  if (tool !== 'Bash') return `${tool}|${patternOf(text)}`
+  if (!isShell(tool)) return `${tool}|${patternOf(text)}`
   const { command } = e as { command?: unknown }
   const head = typeof command === 'string' ? (command.trim().split(/\s+/).find(w => !w.includes('=')) ?? '') : ''
   const body = text.split('\n').filter(l => !/^\s*exit code \d+\s*$/i.test(l)).join('\n')

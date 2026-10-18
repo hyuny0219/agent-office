@@ -24,8 +24,8 @@ export const fileOf = (e: object): string | null => {
   const f = file_path ?? notebook_path
   return typeof f === 'string' && f !== '' ? f : null
 }
-const baseName = (f: string): string => f.split('/').pop() ?? f
-/** 테스트·빌드·타입 검사로 보이는 Bash 명령 */
+const baseName = (f: string): string => f.split(/[\\/]/).pop() ?? f
+/** 테스트·빌드·타입 검사로 보이는 셸 명령(Bash·PowerShell) */
 const CHECK_RE = /\b(test|tests|build|tsc|jest|vitest|pytest|mocha|lint|typecheck|check|cargo|go\s+(test|build|vet)|make|gradle|mvn|ruff|mypy|eslint)\b/
 export const isCheckCommand = (e: object): boolean => {
   const { command } = e as { command?: unknown }

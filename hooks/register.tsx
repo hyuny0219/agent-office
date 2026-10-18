@@ -10,6 +10,7 @@ import { activityOf, layoutOf } from './scene'
 import { answer, COMMAND } from './commands'
 import { awaitApproval, checkBudget, checkFollowUp, checkRework, EDIT_TOOLS, fileOf, isCheckCommand, papers, reorganize, reviewPlan, syncStatus, takeNotes, watch } from './flow'
 import { usageOf } from './tokens'
+import { isShell } from './watch'
 import { admit, agentsOf, chargeAgent, ensure, fresh, hold, hrOf, MEET_MS, meet, nickOfId, patch, readFeed, release, save, saveHr, speak, staff, watchAgents } from './store'
 import { cellsOf, dropOffice, feedRowsOf, FRAME_MS, markPaneShown, officeAt, RASTER, rowsOf, tick } from './view'
 
@@ -147,7 +148,7 @@ export const register: Register = (on, options) => {
       // 실제로 고친 파일만 센다(거절·실패한 수정은 고친 게 아니다)
       const file = ran !== undefined && !isError && EDIT_TOOLS.has(e.tool) ? fileOf(e) : null
       // 테스트·빌드 명령의 결과만 본다(grep의 일치 없음 같은 건 검증 실패가 아니다). 거절은 결과가 아니니 넘긴다
-      const isCheck = e.tool === 'Bash' && ran !== undefined && ran.deny === undefined && isCheckCommand(e)
+      const isCheck = isShell(e.tool) && ran !== undefined && ran.deny === undefined && isCheckCommand(e)
       // 실험 중인 실수가 다시 났으면 오류를 세는 바로 이 저장에서 적는다(곧 끝나 집계돼도 빠지지 않도록)
       const hitKey = isError && ran !== undefined ? errorLessonKey(e.tool, ran.deny ?? ran.text ?? '') : null
       // 실험 재발 표시와 활동·오류 수를 한 번에 적는다(상태를 쓸 때마다 패널을 다시 그린다)
