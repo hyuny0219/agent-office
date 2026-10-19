@@ -31,7 +31,8 @@ const withGwa = (word: string): string => {
 /** 도구별 같은 실수 연속 횟수 중 가장 큰 것 */
 const streakMax = (a: OfficeAgent): number => Math.max(0, ...Object.values(a.errStreaks ?? {}).map(s => s.count))
 
-export type Row = { key: string; text: string; isOff: boolean; isBad: boolean }
+/** nick: 누르면 그 직원의 인사카드(BOSS와 아직 인사 기록에 없는 사람은 null) */
+export type Row = { key: string; text: string; isOff: boolean; isBad: boolean; nick: string | null }
 
 /** 터미널에서 차지하는 칸 수(한글·한자·전각·이모지는 두 칸) */
 export function widthOf(s: string): number {
@@ -101,7 +102,7 @@ export function rowsOf(agents: readonly OfficeAgent[], b: HrBook, now: number, c
       { key: 'signs', full: signs },
       { key: 'mins', full: `${mins}분` },
     ]
-    return { key: `row-${a.id}`, text: fitParts(parts, a.description || '-', columns), isOff: a.endedAt !== null, isBad: a.activity === 'failed' }
+    return { key: `row-${a.id}`, text: fitParts(parts, a.description || '-', columns), isOff: a.endedAt !== null, isBad: a.activity === 'failed', nick: a.id === 'main' || emp === undefined ? null : a.nick }
   })
 }
 

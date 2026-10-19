@@ -1,6 +1,6 @@
 // 사무실 mod의 테스트. 순수 함수(인사·결재·대화·보고서·교육 효과·근태·평면도)는 직접 부르고,
 // 훅은 엔진을 흉내 낸 하네스($, on)에서 띄우기·턴·도구 호출·그리기를 돌려 본다.
-import { expect, test } from 'claude-code/testing'
+import { expect, mock, test } from 'claude-code/testing'
 
 import type { HrBook, JobRecord, OfficeAgent } from '../types'
 import { briefOf, decide, deptOf, emptyBook, gradeOf, handOff, hire, isMuted, leadOf, learn, LESSON_TTL_MS, lessonKey, migrate, RETEST_MS, patternOf, rankOf, review, rework, REWORK_MS, salaryOf, scoreOf, tipOf } from './hr'
@@ -1308,4 +1308,83 @@ test('토큰: v0.10이 남긴 사무실 사람들의 토큰(달러 없음)은 �
   await $.command.run({ command: 'office', args: '', ...RUN })
   const ui = await $.ui.mount({ plugin: 'agent-office', surface: 'terminal', component: 'Pane', requestId: 'agent-office', props: PROPS, viewport: { columns: 96, rows: 50 } })
   expect((await ui.find({ key: 'row-main' }))?.text).toContain('토큰 1.0M($4.00+(가격 모름 5.0k))')
+})
+
+for (const surface of ['terminal', 'desktop'] as const) {
+  test(`메뉴(${surface}): 메뉴와 직원 줄을 누르면 그 내용이 메인 채팅창에 알림으로 남고, 설정은 패널에서 켜고 끈다`, async ($, on) => {
+    const store = new Map<string, unknown>()
+    on('store.get', (_$, e) => ({ value: store.get(e.key) }))
+    on('store.set', (_$, e) => {
+      store.set(e.key, e.value)
+      return { value: undefined }
+    })
+    on('clock.now', () => ({ value: 5000 }))
+    on('ui.open', () => ({ value: { isPlaced: true } }))
+    on('agent.spawn', () => ({ model: 'm', agentId: 'c1' }))
+    on('agent.list', () => ({ value: [{ id: 'c1', description: '고치기', type: 'builder', status: 'running' }] }))
+    const session = mock.session(on)
+    await $.agent.spawn({ tool_use_id: 't1', prompt: '버그를 고쳐', description: '고치기', subagentType: 'builder', ...SPAWN })
+    await $.command.run({ command: 'office', args: '', ...RUN })
+    const ui = await $.ui.mount({ plugin: 'agent-office', surface, component: 'Pane', requestId: 'agent-office', props: PROPS, viewport: { columns: 96, rows: 50 } })
+    const notices = () => session.appended().filter(r => r.door === 'note').map(r => {
+      const block = r.message.content[0]
+      return { type: r.message.type, text: block !== undefined && 'text' in block ? String(block.text) : '' }
+    })
+
+    await ui.press({ key: 'menu-hr' })
+    expect(notices()[0]?.type).toBe('system')
+    expect(notices()[0]?.text).toContain('에이전트 사무실 인사 기록')
+    // 직원 줄을 누르면 그 직원의 인사카드
+    const nick = (await ui.find({ key: 'row-c1' }))?.text?.split(' ')[0] ?? ''
+    await ui.press({ key: 'row-c1' })
+    expect(notices()[1]?.text).toContain(`인사카드: ${nick} `)
+    await ui.press({ key: 'menu-week' })
+    expect(notices()[2]?.text).toContain('주간 보고')
+    await ui.press({ key: 'menu-budget' })
+    expect(notices()[3]?.text).toContain('부서 예산이 없습니다')
+
+    await ui.press({ key: 'menu-today' })
+    expect(notices()[4]?.text).toContain('일간 보고')
+    // BOSS 줄은 인사 기록이 없어 누를 수 없다
+    await expect(ui.press({ key: 'row-main' })).rejects.toThrow()
+    expect(notices()).toHaveLength(5)
+
+    // 설정: 펼치면 켜고 끄는 버튼이 보이고, 누르면 바뀌며 그 한 줄이 채팅창에 남는다
+    expect(await ui.find({ key: 'set-approval' })).toBeUndefined()
+    await ui.press({ key: 'menu-settings' })
+    expect((await ui.find({ key: 'set-approval' }))?.text).toBe('결재 켜짐')
+    await ui.press({ key: 'set-approval' })
+    expect((await ui.find({ key: 'set-approval' }))?.text).toBe('결재 꺼짐')
+    expect(notices()[5]?.text).toBe('결재를 멈춥니다. 보고와 계획은 결재 없이 넘어갑니다.')
+    await ui.press({ key: 'set-approval' })
+    expect((await ui.find({ key: 'set-approval' }))?.text).toBe('결재 켜짐')
+    expect(notices()[6]?.text).toContain('팀장이 결재하고')
+    // 나머지 셋도 실제 설정을 뒤집는다(명부 머리에 보이는 값으로 확인)
+    for (const key of ['set-reorg', 'set-coach', 'set-trial']) await ui.press({ key })
+    expect((await ui.find({ key: 'set-reorg' }))?.text).toBe('조직 개편 꺼짐')
+    const head = String((await $.command.run({ command: 'office', args: 'hr', ...RUN }) as { text?: string }).text ?? '')
+    expect(head).toContain('업무 지시 인사 메모: 꺼짐 · 교육 효과 측정: 꺼짐 · 결재: 켜짐 · 조직 개편: 꺼짐')
+    // 슬래시 명령으로 바꿔도 패널 표시가 따라온다
+    await $.command.run({ command: 'office', args: 'reorg on', ...RUN })
+    expect((await ui.find({ key: 'set-reorg' }))?.text).toBe('조직 개편 켜짐')
+    await ui.press({ key: 'menu-settings' })
+    expect(await ui.find({ key: 'set-approval' })).toBeUndefined()
+  })
+}
+
+test('메뉴: 채팅창에 남기지 못하면(다른 plugin이 막음) 토스트로 /office 명령을 알린다', async ($, on) => {
+  on('store.get', () => ({ value: undefined }))
+  on('store.set', () => ({ value: undefined }))
+  on('clock.now', () => ({ value: 0 }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  const toasts: string[] = []
+  on('ui.toast', (_$, e) => {
+    toasts.push(String((e as { text?: unknown }).text ?? ''))
+    return { value: undefined }
+  })
+  on('session.append', () => ({ deny: '막음' }) as never)
+  await $.command.run({ command: 'office', args: '', ...RUN })
+  const ui = await $.ui.mount({ plugin: 'agent-office', surface: 'terminal', component: 'Pane', requestId: 'agent-office', props: PROPS, viewport: { columns: 96, rows: 50 } })
+  await ui.press({ key: 'menu-week' })
+  expect(toasts).toEqual(['채팅창에 남기지 못했습니다. /office report week로 보세요'])
 })

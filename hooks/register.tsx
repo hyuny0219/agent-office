@@ -10,8 +10,9 @@ import { activityOf, layoutOf } from './scene'
 import { answer, COMMAND } from './commands'
 import { awaitApproval, checkBudget, checkFollowUp, checkRework, EDIT_TOOLS, fileOf, isCheckCommand, papers, reorganize, reviewPlan, syncStatus, takeNotes, watch } from './flow'
 import { usageOf } from './tokens'
+import { flip, MENU, postAnswer, SETTINGS, TOGGLES } from './menu'
 import { isShell } from './watch'
-import { admit, agentsOf, chargeAgent, ensure, fresh, hold, hrOf, MEET_MS, meet, nickOfId, patch, readFeed, release, save, saveHr, speak, staff, watchAgents } from './store'
+import { admit, agentsOf, chargeAgent, readSettingsOpen, toggleSettingsOpen, ensure, fresh, hold, hrOf, MEET_MS, meet, nickOfId, patch, readFeed, release, save, saveHr, speak, staff, watchAgents } from './store'
 import { cellsOf, dropOffice, feedRowsOf, FRAME_MS, markPaneShown, officeAt, RASTER, rowsOf, tick } from './view'
 
 const PANE = 'agent-office'
@@ -36,6 +37,8 @@ export const register: Register = (on, options) => {
 
   on('command.run', { command: 'office' }, async ($, e) => {
     const text = await answer($, e.args)
+    // 설정을 바꾼 명령이면 패널의 켜짐·꺼짐 표시를 다시 그린다(설정은 상태가 아니라 저장소에 있다)
+    if (text !== null) $.ui.invalidate('ui.render')
     if (text !== null) return { text }
     await ensure($, 'main')
     const opened = await $.ui.open({ id: PANE, title: '에이전트 사무실' })
@@ -207,29 +210,57 @@ export const register: Register = (on, options) => {
     const lines = rowsOf(agents, b, now, e.surface === 'terminal' ? (e.viewport?.columns ?? 80) - 2 : Infinity)
     const feedLines = feedRowsOf(feed, now)
 
-    if (e.surface !== 'terminal') {
+    const isSettingsOpen = await readSettingsOpen($)
+    const { Box, Text, Button } = $.ui.resolve(e)
+    // 메뉴와 직원 줄은 누르면 그 내용을 메인 채팅창에 알림으로 남긴다(/office 하위 명령과 같은 글)
+    const menu = (
+      <Box flexDirection="column">
+        <Box columnGap={2} flexWrap="wrap">
+          {MENU.map(m => <Button key={m.key} hotkey={m.hotkey} plain onPress={() => postAnswer($, m.args)}>{m.label}</Button>)}
+          <Button key={SETTINGS.key} hotkey={SETTINGS.hotkey} plain onPress={() => toggleSettingsOpen($).catch(() => undefined)}>{isSettingsOpen ? '설정 접기' : '설정'}</Button>
+        </Box>
+        {isSettingsOpen && (
+          <Box columnGap={2} flexWrap="wrap">
+            {TOGGLES.map(t => (
+              <Button key={t.key} plain onPress={() => flip($, t.key).catch(() => undefined)}>{`${t.label} ${t.isOn(b) ? '켜짐' : '꺼짐'}`}</Button>
+            ))}
+          </Box>
+        )}
+      </Box>
+    )
+    const isTerminal = e.surface === 'terminal'
+    const rowEls = lines.map(l => (
+      <Box key={l.nick === null ? l.key : `${l.key}-line`}>
+        {l.nick === null
+          ? <Text dimColor={l.isOff} color={l.isBad ? 'red' : undefined} wrap={isTerminal ? 'truncate-end' : undefined}>{l.text}</Text>
+          : <Button key={l.key} plain onPress={() => postAnswer($, `hr ${l.nick}`)}>
+              <Text dimColor={l.isOff} color={l.isBad ? 'red' : undefined} wrap={isTerminal ? 'truncate-end' : undefined}>{l.text}</Text>
+            </Button>}
+      </Box>
+    ))
+
+    if (!isTerminal) {
       dropOffice(PANE)
-      const { Box, Text } = $.ui.resolve(e)
       return (
         <Box flexDirection="column">
-          <Text dimColor>사무실 평면도는 터미널에서만 그려집니다. 인사 기록은 /office hr.</Text>
-          {lines.map(l => <Box key={l.key}><Text dimColor={l.isOff} color={l.isBad ? 'red' : undefined}>{l.text}</Text></Box>)}
+          {menu}
+          <Text dimColor>사무실 평면도는 터미널에서만 그려집니다. 직원 줄을 누르면 인사카드가 채팅창에 나옵니다.</Text>
+          {rowEls}
           {feedLines.length > 0 && <Text bold>사내 메신저</Text>}
           {feedLines.map(l => <Box key={l.key}><Text color={l.color} wrap="truncate-end">{l.text}</Text></Box>)}
         </Box>
       )
     }
 
-    const { Box, Text, Raster } = $.ui.resolve(e)
+    const { Raster } = $.ui.resolve(e)
     const office = officeAt(PANE, layoutOf(e.viewport?.columns ?? 80))
     const cells = cellsOf(office, agents, now, b)
     return (
       <Box flexDirection="column">
+        {menu}
         <Raster key={RASTER} columns={office.layout.columns} rows={office.layout.rows} cells={cells} />
         {lines.length === 0 && <Text dimColor>아직 일하는 에이전트가 없습니다.</Text>}
-        {lines.map(l => (
-          <Box key={l.key}><Text dimColor={l.isOff} color={l.isBad ? 'red' : undefined} wrap="truncate-end">{l.text}</Text></Box>
-        ))}
+        {rowEls}
         {feedLines.length > 0 && <Box marginTop={1}><Text bold>사내 메신저</Text></Box>}
         {feedLines.map(l => <Box key={l.key}><Text color={l.color} wrap="truncate-end">{l.text}</Text></Box>)}
       </Box>

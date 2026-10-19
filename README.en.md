@@ -47,6 +47,8 @@ In the desktop app, where `/plugin` does not run: click + next to the prompt box
 
 The floor plan is drawn in pixels in the terminal (72 to 140 columns wide, 27 rows tall). The desktop app and VS Code show the list only.
 
+Press a menu item above the pane (`1` roster · `2` daily report · `3` weekly report · `4` budget), or an employee's row (their personnel card), and the same text is left in the main chat as a notice. Notices are for you; the model doesn't read them. Open `5` settings to turn approvals, reorganization, the HR memo and training-effect measurement on or off right in the pane. The hotkeys work while the pane has focus.
+
 ## The office
 
 - Upstairs: CEO office, meeting room, library, server room, restrooms. In the middle: a corridor with the entrance, reception desk, water cooler and vending machine. Downstairs: desk islands per department, and a pantry.
@@ -165,7 +167,7 @@ claude plugin test .
 claude --plugin-dir .
 ```
 
-`hooks/register.tsx` only wires engine events; the work is split up: `store.ts` (state and persistence), `flow.ts` (sync, reviews, approvals, attendance, reorganization), `view.ts` (pane rows, painting the floor plan), `commands.ts` (`/office` text answers). Decisions live in pure modules: `hr.ts` (HR), `org.ts` (assignment, approval accuracy, reorganization), `approval.ts` (approvals), `speech.ts` (chatter), `report.ts` (reports, roster, personnel cards), `tokens.ts` (token usage and cost), `budget.ts` (department budgets), `trial.ts` (training effect), `watch.ts` (attendance), `scene.ts` (floor plan).
+`hooks/register.tsx` only wires engine events; the work is split up: `store.ts` (state and persistence), `flow.ts` (sync, reviews, approvals, attendance, reorganization), `view.ts` (pane rows, painting the floor plan), `commands.ts` (`/office` text answers), `menu.ts` (the pane menu: a press leaves a notice in the chat). Decisions live in pure modules: `hr.ts` (HR), `org.ts` (assignment, approval accuracy, reorganization), `approval.ts` (approvals), `speech.ts` (chatter), `report.ts` (reports, roster, personnel cards), `tokens.ts` (token usage and cost), `budget.ts` (department budgets), `trial.ts` (training effect), `watch.ts` (attendance), `scene.ts` (floor plan).
 
 The README screenshots (`docs/office.png`, `docs/office.gif`) are made by running `hooks/scene.ts` itself (needs Pillow):
 

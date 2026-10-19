@@ -18,6 +18,7 @@ export const MEET_MS = 8000
 const HR_KEY = 'hr'
 const agentsAtom = atom({ plugin: 'agent-office', key: 'agents' } as const, [])
 const feedAtom = atom({ plugin: 'agent-office', key: 'feed' } as const, [])
+const settingsAtom = atom({ plugin: 'agent-office', key: 'settingsOpen' } as const, false)
 
 // 이 모듈의 사본(상태가 원본, 다시 불러오면 상태에서 채운다)
 let cache: OfficeAgent[] | null = null
@@ -67,6 +68,13 @@ export async function watchAgents($: EngineInterface) {
 }
 export async function readFeed($: EngineInterface) {
   return read($, feedAtom)
+}
+/** 패널 메뉴의 설정 줄: 상태에 두어 다시 불러와도 그대로이고, 바꾸면 그리는 쪽이 다시 그린다 */
+export async function readSettingsOpen($: EngineInterface) {
+  return read($, settingsAtom)
+}
+export async function toggleSettingsOpen($: EngineInterface) {
+  await update($, settingsAtom, v => !v)
 }
 
 export async function agentsOf($: EngineInterface): Promise<OfficeAgent[]> {
