@@ -47,7 +47,7 @@ In the desktop app, where `/plugin` does not run: click + next to the prompt box
 
 The floor plan is drawn in pixels in the terminal (72 to 140 columns wide, 27 rows tall). The desktop app and VS Code show the list only.
 
-Press a menu item above the pane (`1` roster · `2` daily report · `3` weekly report · `4` budget), or an employee's row (their personnel card), and the same text is left in the main chat as a notice. Notices are for you; the model doesn't read them. Open `5` settings to turn approvals, reorganization, the HR memo and training-effect measurement on or off right in the pane. The hotkeys work while the pane has focus.
+Press a menu item above the pane (`1` roster · `2` daily report · `3` weekly report · `4` budget), or an employee's row (their personnel card), and the same text is left in the main chat as dim notice lines (split up when long). Notices are for you; the model doesn't read them. Open `5` settings to turn approvals, reorganization, the HR memo and training-effect measurement on or off right in the pane. The hotkeys work while the pane has focus.
 
 ## The office
 

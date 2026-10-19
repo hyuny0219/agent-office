@@ -1,6 +1,6 @@
 // 사무실 mod의 테스트. 순수 함수(인사·결재·대화·보고서·교육 효과·근태·평면도)는 직접 부르고,
 // 훅은 엔진을 흉내 낸 하네스($, on)에서 띄우기·턴·도구 호출·그리기를 돌려 본다.
-import { expect, mock, test } from 'claude-code/testing'
+import { expect, test } from 'claude-code/testing'
 
 import type { HrBook, JobRecord, OfficeAgent } from '../types'
 import { briefOf, decide, deptOf, emptyBook, gradeOf, handOff, hire, isMuted, leadOf, learn, LESSON_TTL_MS, lessonKey, migrate, RETEST_MS, patternOf, rankOf, review, rework, REWORK_MS, salaryOf, scoreOf, tipOf } from './hr'
@@ -10,6 +10,7 @@ import { agoText, cardOf, durationText, findEmployee, jobsIn, reportOf } from '.
 import { CONTROL_EVERY, effectText, enroll, markHit, MIN_CONTROL, MIN_MEMO, settle, verdictOf } from './trial'
 import { callKeyOf, errorKeyOf, isAlarm, isOvertime, isPolling, nudgeOf, OVERTIME_MS, stepOf } from './watch'
 import { fitParts, rowsOf, widthOf } from './view'
+import { chunksOf } from './menu'
 import { activityOf, encodeCells, koNick, layoutOf, nickFor, Office, PLAN_ROWS } from './scene'
 import { addTokens, chargeReview, costText, modelLabel, priceOf, tokenDetail, tokensOf, tokenText, totalOf, usageOf, usdText } from './tokens'
 import { BUDGET_MS, budgetLines, deptNamed, dollarsOf, noticed, overrunsOf, spentOf } from './budget'
@@ -1311,7 +1312,7 @@ test('토큰: v0.10이 남긴 사무실 사람들의 토큰(달러 없음)은 �
 })
 
 for (const surface of ['terminal', 'desktop'] as const) {
-  test(`메뉴(${surface}): 메뉴와 직원 줄을 누르면 그 내용이 메인 채팅창에 알림으로 남고, 설정은 패널에서 켜고 끈다`, async ($, on) => {
+  test(`메뉴(${surface}): 메뉴와 직원 줄을 누르면 그 내용이 메인 채팅창에 흐린 알림 줄로 남고, 설정은 패널에서 켜고 끈다`, async ($, on) => {
     const store = new Map<string, unknown>()
     on('store.get', (_$, e) => ({ value: store.get(e.key) }))
     on('store.set', (_$, e) => {
@@ -1322,17 +1323,18 @@ for (const surface of ['terminal', 'desktop'] as const) {
     on('ui.open', () => ({ value: { isPlaced: true } }))
     on('agent.spawn', () => ({ model: 'm', agentId: 'c1' }))
     on('agent.list', () => ({ value: [{ id: 'c1', description: '고치기', type: 'builder', status: 'running' }] }))
-    const session = mock.session(on)
+    const logged: { to: string; text: string }[] = []
+    on('ui.log', (_$, e) => {
+      logged.push({ to: e.to, text: e.text })
+      return { value: undefined }
+    })
     await $.agent.spawn({ tool_use_id: 't1', prompt: '버그를 고쳐', description: '고치기', subagentType: 'builder', ...SPAWN })
     await $.command.run({ command: 'office', args: '', ...RUN })
     const ui = await $.ui.mount({ plugin: 'agent-office', surface, component: 'Pane', requestId: 'agent-office', props: PROPS, viewport: { columns: 96, rows: 50 } })
-    const notices = () => session.appended().filter(r => r.door === 'note').map(r => {
-      const block = r.message.content[0]
-      return { type: r.message.type, text: block !== undefined && 'text' in block ? String(block.text) : '' }
-    })
+    const notices = () => logged
 
     await ui.press({ key: 'menu-hr' })
-    expect(notices()[0]?.type).toBe('system')
+    expect(notices()[0]?.to).toBe('transcript')
     expect(notices()[0]?.text).toContain('에이전트 사무실 인사 기록')
     // 직원 줄을 누르면 그 직원의 인사카드
     const nick = (await ui.find({ key: 'row-c1' }))?.text?.split(' ')[0] ?? ''
@@ -1372,19 +1374,17 @@ for (const surface of ['terminal', 'desktop'] as const) {
   })
 }
 
-test('메뉴: 채팅창에 남기지 못하면(다른 plugin이 막음) 토스트로 /office 명령을 알린다', async ($, on) => {
-  on('store.get', () => ({ value: undefined }))
-  on('store.set', () => ({ value: undefined }))
-  on('clock.now', () => ({ value: 0 }))
-  on('ui.open', () => ({ value: { isPlaced: true } }))
-  const toasts: string[] = []
-  on('ui.toast', (_$, e) => {
-    toasts.push(String((e as { text?: unknown }).text ?? ''))
-    return { value: undefined }
-  })
-  on('session.append', () => ({ deny: '막음' }) as never)
-  await $.command.run({ command: 'office', args: '', ...RUN })
-  const ui = await $.ui.mount({ plugin: 'agent-office', surface: 'terminal', component: 'Pane', requestId: 'agent-office', props: PROPS, viewport: { columns: 96, rows: 50 } })
-  await ui.press({ key: 'menu-week' })
-  expect(toasts).toEqual(['채팅창에 남기지 못했습니다. /office report week로 보세요'])
+test('메뉴: 긴 답은 줄 단위로 2000자 안쪽 덩어리로 나눠 남긴다', () => {
+  expect(chunksOf('a\nb\nc', 3)).toEqual(['a\nb', 'c'])
+  expect(chunksOf('abcdef\nx', 3)).toEqual(['abc', 'def', 'x'])
+  // 빈 줄(경계·맨 앞·맨 끝)도 빠지지 않고, 꼭 맞는 길이는 한 덩어리
+  expect(chunksOf('ab\n\ncd', 3)).toEqual(['ab\n', 'cd'])
+  expect(chunksOf('\na\n', 5)).toEqual(['\na\n'])
+  expect(chunksOf('a\nb', 3)).toEqual(['a\nb'])
+  for (const t of ['ab\n\ncd', '\n\nabc\n\n', 'a\n\nb\nc\n\n']) expect(chunksOf(t, 3).join('\n')).toBe(t)
+  expect(chunksOf('')).toEqual([])
+  const long = Array.from({ length: 100 }, (_, i) => `${i} ${'가'.repeat(40)}`).join('\n')
+  const parts = chunksOf(long)
+  expect(parts.every(p => p.length <= 2000)).toBe(true)
+  expect(parts.join('\n')).toBe(long)
 })
