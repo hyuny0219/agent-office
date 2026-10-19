@@ -4,7 +4,7 @@ import type { Register } from 'claude-code'
 
 import type { Bubble, Dept, OfficeAgent, TrialTicket, Utterance } from '../types'
 import { briefOf, learn, lessonKey, lessonsFor } from './hr'
-import { messageOf, oopsOf, orderOf, replyOf, selfTalkOf } from './speech'
+import { checkRunOf, errLineOf, messageOf, oopsOf, orderOf, replyOf, selfTalkOf } from './speech'
 import { enroll, errorLessonKey, markHit } from './trial'
 import { activityOf, layoutOf } from './scene'
 import { answer, COMMAND } from './commands'
@@ -165,6 +165,10 @@ export const register: Register = (on, options) => {
         return a.activity === 'done' || a.activity === 'failed' ? a : {
         ...a, activity: last === undefined ? 'think' : activityOf(last), tool: last ?? a.tool, errors: (a.errors ?? 0) + (isError ? 1 : 0),
         isCheckFailed: isCheck ? ran?.isError === true : a.isCheckFailed,
+        // 결재 근거: 돌린 확인 명령과 그 결과, 난 오류(비밀은 가려 둔다)
+        // (BOSS는 결재받지 않으니 쌓지 않는다)
+        checks: isCheck && ran !== undefined && id !== 'main' ? [...(a.checks ?? []), checkRunOf(e, ran.isError === true, ran.text ?? '')].slice(-3) : a.checks,
+        errLines: isError && ran !== undefined && id !== 'main' ? [...(a.errLines ?? []), errLineOf(e.tool, ran.deny ?? ran.text ?? '')].slice(-3) : a.errLines,
         files: file === null || id === 'main' || (a.files ?? []).includes(file) ? a.files : [...(a.files ?? []), file].slice(-50),
         }
       }))

@@ -10,7 +10,7 @@ import type { Facts } from './approval'
 import { approvalLineOf, hrLineOf, replyOf, reportLineOf } from './speech'
 import { followUp, isRejectTrusted, reinstate, reorgOf } from './org'
 import { settle } from './trial'
-import { callKeyOf, ERROR_STREAK, errorKeyOf, errorToast, isAlarm, isOvertime, isPolling, nudgeOf, REPEAT_STREAK, repeatToast, stepOf } from './watch'
+import { callKeyOf, isCheckCommand, ERROR_STREAK, errorKeyOf, errorToast, isAlarm, isOvertime, isPolling, nudgeOf, REPEAT_STREAK, repeatToast, stepOf } from './watch'
 import { shortType } from './scene'
 import { addTokens, chargeReview, usageOf } from './tokens'
 import { noticed, overrunsOf, overrunText } from './budget'
@@ -25,12 +25,7 @@ export const fileOf = (e: object): string | null => {
   return typeof f === 'string' && f !== '' ? f : null
 }
 const baseName = (f: string): string => f.split(/[\\/]/).pop() ?? f
-/** 테스트·빌드·타입 검사로 보이는 셸 명령(Bash·PowerShell) */
-const CHECK_RE = /\b(test|tests|build|tsc|jest|vitest|pytest|mocha|lint|typecheck|check|cargo|go\s+(test|build|vet)|make|gradle|mvn|ruff|mypy|eslint)\b/
-export const isCheckCommand = (e: object): boolean => {
-  const { command } = e as { command?: unknown }
-  return typeof command === 'string' && CHECK_RE.test(command)
-}
+export { isCheckCommand }
 
 /** 결재에 쓸 지시·보고(에이전트 id →). 패널이 구독하는 상태에 두지 않는다: 길어서 쓸 때마다 패널로 실려 간다 */
 export const papers = new Map<string, { task?: string; report?: string }>()
@@ -113,6 +108,7 @@ async function review1($: EngineInterface, a: OfficeAgent, isDone: boolean, isKi
     const facts: Facts = {
       description: got.description, task: papers.get(a.id)?.task ?? '', report: papers.get(a.id)?.report ?? '', tools: got.tools, errors: got.errors ?? 0,
       isCheckFailed: got.isCheckFailed === true, alarms: got.alarms ?? 0, files: (got.files ?? []).length, durationMs: now - got.startedAt,
+      fileNames: got.files ?? [], checks: got.checks ?? [], errLines: got.errLines ?? [],
     }
     const parentId = got.parentId ?? 'main'
     // 전결은 이 일을 하기 전 직급으로 가린다(이 일로 오른 직급으로 자기 일을 전결하지 않도록)

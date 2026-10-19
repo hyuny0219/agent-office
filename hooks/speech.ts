@@ -1,7 +1,7 @@
 // 사내 대화. 직원들이 일하며 하는 말을 만든다: 평면도 머리 위에 잠깐 뜨는 짧은 말풍선(영문, 평면도 글자는 영문뿐)과
 // 평면도 아래 사내 메신저에 남는 한 줄(한글). 지시·보고·메시지·혼잣말·실수·결재. 순수 함수만 둔다.
-import type { Bubble, Utterance, UtteranceKind } from '../types'
-import { isShell } from './watch'
+import type { Bubble, CheckRun, Utterance, UtteranceKind } from '../types'
+import { isCheckSegment, isShell, segmentsOf } from './watch'
 
 /** 말풍선이 떠 있는 시간 */
 export const BUBBLE_MS = 3500
@@ -68,6 +68,44 @@ export function selfTalkOf(nick: string, e: { tool: string } & object, at: numbe
   const line = isShell(e.tool) && desc.trim() !== '' ? said(at, 'self', nick, desc) : null
   return { bubble, line }
 }
+
+/** 근거로 남길 한 줄: 공백·줄바꿈을 한 칸으로 접고 백틱은 '로 바꿔(칸을 깨거나 가짜 줄을 만들지 못하도록) 비밀을 가린다 */
+const oneLine = (s: string, max: number): string => scrub(s.replace(/\s+/g, ' ').replace(/`/g, "'").trim()).slice(0, max)
+
+/** 출력의 첫(또는 마지막) 의미 있는 줄: "Exit code N" 줄은 건너뛰고, 한 줄로, 비밀은 가리고 */
+export function lineOf(text: string, which: 'first' | 'last', max = 120): string {
+  const lines = text.split('\n').map(l => l.trim()).filter(l => l !== '' && !/^exit code \d+$/i.test(l))
+  return oneLine((which === 'first' ? lines[0] : lines[lines.length - 1]) ?? '', max)
+}
+
+/**
+ * 명령 이름: 첫 줄을 &&·;로 나눠 확인(테스트·빌드)으로 보이는 조각(없으면 마지막 조각)에서, 환경 변수 대입을 건너뛰고
+ * 앞 낱말을 세 개까지, 옵션·인자·특수 문자를 만나면 멈춘다(cd x && npm test → npm test, ./gradlew build → ./gradlew build).
+ * 인자에 섞일 수 있는 비밀은 남기지 않고, 남은 것도 가린다
+ */
+export function commandNameOf(command: string): string {
+  const segs = segmentsOf(command)
+  const seg = segs.find(isCheckSegment) ?? segs[segs.length - 1] ?? ''
+  const out: string[] = []
+  for (const w of seg.split(/\s+/)) {
+    if (out.length === 0 && /^[A-Za-z_][A-Za-z0-9_]*=/.test(w)) continue
+    if (!/^(\.{0,2}\/)?[A-Za-z0-9][\w.:/@+-]*$/.test(w) || w.includes('://') || out.length >= 3) break
+    out.push(w)
+  }
+  const name = scrub(out.join(' ')).slice(0, 60)
+  return name === '' ? '(명령)' : name
+}
+
+/** 테스트·빌드 명령 한 번의 기록(결재 근거). 종료 코드를 믿을 수 없는 명령은 "알 수 없음" */
+export function checkRunOf(e: object, isFailed: boolean, text: string): CheckRun {
+  const x = e as Record<string, unknown>
+  const command = str(x.command)
+  const isUnsure = x.run_in_background === true || /\|\||[^|]\|[^|]|;|\n|&\s*$/.test(command.trim())
+  return { cmd: commandNameOf(command), result: isUnsure ? 'unsure' : isFailed ? 'fail' : 'pass', tail: lineOf(text, 'last', 80) }
+}
+
+/** 도구 오류 한 줄(결재 근거) */
+export const errLineOf = (tool: string, text: string): string => `${tool}: ${lineOf(text, 'first')}`
 
 /** 도구가 실패했을 때: 말풍선 oops!, 메신저에 무엇이 실패했는지 */
 export function oopsOf(nick: string, tool: string, text: string, at: number): { bubble: Bubble; line: Utterance } {

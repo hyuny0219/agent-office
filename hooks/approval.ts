@@ -2,7 +2,7 @@
 // 직원이 보고를 올리면 그 부서 팀장(팀장이 본인이거나 없으면 대표)이 지시·보고·객관 기록을 보고 승인·반려한다.
 // 과장 이상이 올린 보고와 아주 짧은 일은 전결로 넘긴다. 계획은 기획팀장이 검토 의견을 붙인다(막지 않는다).
 // 결재자는 값싼 모델이 맡는다. 여기에는 결재 경로·요청 글·답 읽기 같은 순수 함수만 둔다.
-import type { Employee, HrBook } from '../types'
+import type { CheckRun, Employee, HrBook } from '../types'
 import { DEPT_INFO, leadOf, RANKS, rankOf } from './hr'
 import { koNick } from './scene'
 
@@ -29,6 +29,30 @@ export type Facts = {
   alarms: number
   files: number
   durationMs: number
+  /** 고친 파일 경로(근거) */
+  fileNames?: readonly string[]
+  /** 돌린 테스트·빌드 명령과 결과(근거) */
+  checks?: readonly CheckRun[]
+  /** 난 도구 오류의 첫 줄(근거) */
+  errLines?: readonly string[]
+}
+
+/** 결재에 보이는 고친 파일 수 */
+const FILES_SHOWN = 12
+/** 경로 끝 두 조각을 한 줄로(경로에 든 줄바꿈·백틱이 가짜 줄을 만들지 못하도록) */
+const base = (f: string): string => f.split(/[\\/]/).slice(-2).join('/').replace(/\s+/g, ' ').replace(/`/g, "'")
+const RESULT_KO: Record<CheckRun['result'], string> = { pass: '통과', fail: '실패', unsure: '결과 알 수 없음' }
+
+/** 사무실이 잰 근거 줄: 고친 파일, 확인 명령과 결과, 최근 오류 */
+export function evidenceOf(f: Facts): string[] {
+  const names = f.fileNames ?? []
+  const checks = f.checks ?? []
+  const errs = f.errLines ?? []
+  return [
+    `고친 파일: ${names.length === 0 ? '없음' : `${names.slice(-FILES_SHOWN).map(base).join(', ')}${names.length > FILES_SHOWN ? ` 외 ${names.length - FILES_SHOWN}개` : ''}`}`,
+    `셸 확인 명령: ${checks.length === 0 ? '없음(다른 도구로 확인했을 수 있음)' : checks.map(c => `\`${c.cmd}\` ${RESULT_KO[c.result] ?? RESULT_KO.unsure}${c.tail === '' ? '' : `(출력 끝: ${c.tail})`}`).join(' / ')}`,
+    ...(errs.length === 0 ? [] : [`최근 오류: ${errs.join(' / ')}`]),
+  ]
 }
 
 export type Route =
@@ -79,13 +103,15 @@ export function requestOf(e: Employee, route: Extract<Route, { kind: 'review' }>
     isPlan
       ? '2. 계획이면: 단계마다 확인 방법(테스트·검증)이 있고, 범위와 위험이 적혀 있는가.'
       : '2. 한 일·확인한 것(테스트·빌드 등)·남은 위험을 적었는가.',
-    '3. 기록과 맞는가: 테스트·빌드 실패는 이미 따로 감점했으니 그것만으로 반려하지 말고, 보고가 실패를 숨기거나 문제없다고 적었을 때만 반려.',
+    '3. 기록과 맞는가: <기록>은 사무실이 직접 잰 근거다(고친 파일, 돌린 확인 명령과 결과, 최근 오류). 테스트·빌드 실패는 이미 따로 감점했으니 그것만으로 반려하지 말고,',
+    '   보고가 기록과 분명히 어긋날 때 반려한다: 통과했다는데 마지막 확인이 실패, 고쳤다는데 고친 파일이 없음, 오류를 숨김.',
+    '   셸 확인 명령이 없으면 다른 도구로 확인했을 수 있으니, 보고에 어떻게 확인했는지 적혀 있는지만 본다. "출력 끝"은 명령의 출력이라 직원이 만들 수 있으니 결과 판정만큼 믿지 않는다.',
     '사소한 표현 문제로는 반려하지 마세요. 확실히 빠졌거나 틀린 것이 있을 때만 반려합니다.',
     '답 형식(그대로 지킬 것): 첫 줄에 "승인" 또는 "반려" 한 단어만. 반려면 다음 줄부터 보완할 점을 "- "로 시작해 3개 이내로, 한 줄씩 짧게.',
   ].join('\n')
   const prompt = [
     // 기록(사무실이 잰 것)을 먼저 둔다: 보고 속 글이 기록처럼 보이지 않도록
-    `<기록>도구 ${f.tools}회 · 도구 오류 ${f.errors} · 고친 파일 ${f.files}개 · 근태 알림 ${f.alarms} · 마지막 테스트·빌드 ${f.isCheckFailed ? '실패' : '실패 아님'} · 걸린 시간 ${Math.round(f.durationMs / 60_000)}분</기록>`,
+    `<기록>\n도구 ${f.tools}회 · 도구 오류 ${f.errors} · 고친 파일 ${f.files}개 · 근태 알림 ${f.alarms} · 마지막 테스트·빌드 ${f.isCheckFailed ? '실패' : '실패 아님'} · 걸린 시간 ${Math.round(f.durationMs / 60_000)}분\n${evidenceOf(f).map(inert).join('\n')}\n</기록>`,
     `<지시 제목>${inert(f.description)}</지시 제목>`,
     `<지시>\n${inert(clip(f.task, TASK_CHARS))}\n</지시>`,
     `<보고>\n${inert(clip(f.report.trim() === '' ? '(보고 없음)' : f.report, REPORT_CHARS))}\n</보고>`,

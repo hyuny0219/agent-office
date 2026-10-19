@@ -33,6 +33,10 @@ export type OfficeAgent = {
   files?: string[]
   /** 마지막 Bash(테스트·빌드)가 실패했는지. 실패한 채 끝내면 감점 */
   isCheckFailed?: boolean
+  /** 이번 일에서 돌린 테스트·빌드 명령(최근 3개, 결재 근거) */
+  checks?: CheckRun[]
+  /** 이번 일에서 난 도구 오류의 첫 줄(최근 3개, 결재 근거) */
+  errLines?: string[]
   /** 도구별로 연달아 난 같은 오류(헛손질) */
   errStreaks?: Record<string, Streak>
   /** 연달아 부른 같은 도구·같은 입력(제자리걸음) */
@@ -54,6 +58,12 @@ export type OfficeAgent = {
  * 가격을 모르는 모델이 쓴 토큰 수(달러에 들지 않은 몫)
  */
 export type TokenUse = { input: number; output: number; cacheRead: number; cacheWrite: number; usd: number; unpriced: number }
+
+/**
+ * 테스트·빌드 명령 한 번: 명령 이름(앞 낱말 몇 개뿐, 인자·비밀은 남기지 않는다), 결과(통과·실패·알 수 없음: 백그라운드나
+ * 종료 코드를 덮는 ||·|·; 가 든 명령), 출력 마지막 줄(한 줄, 비밀은 가림)
+ */
+export type CheckRun = { cmd: string; result: 'pass' | 'fail' | 'unsure'; tail: string }
 
 /** 평면도 머리 위 말풍선: 영문 짧은 말, 그 말을 한 때, 말투(혼잣말·대화·실수·좋은 소식) */
 export type Bubble = { text: string; at: number; tone: 'self' | 'talk' | 'bad' | 'good' }

@@ -40,6 +40,28 @@ export function callKeyOf(e: { tool: string } & object): string {
 /** 셸 명령 도구(맥·리눅스의 Bash, 윈도우의 PowerShell): 입력이 같은 모양(command·description)이다 */
 export const isShell = (tool: string): boolean => tool === 'Bash' || tool === 'PowerShell'
 
+/** 테스트·빌드·타입 검사로 보이는 낱말 */
+const CHECK_RE = /\b(test|tests|build|tsc|jest|vitest|pytest|unittest|mocha|lint|typecheck|check|cargo|go\s+(test|build|vet)|make|gradlew?|mvn|ruff|mypy|eslint|playwright|cypress|ctest|pester|Invoke-Pester)\b/i
+/** 파일을 읽거나 찾기만 하는 명령은 확인이 아니다(grep foo test/의 "일치 없음"을 테스트 실패로 읽지 않도록) */
+const LOOK_RE = /^(cd|grep|rg|cat|ls|find|head|tail|echo|sed|awk|wc|less|more|git|Get-ChildItem|Get-Content|Select-String|Set-Location)$/i
+const isAssign = (w: string): boolean => /^[A-Za-z_][A-Za-z0-9_]*=/.test(w)
+
+/** 명령 첫 줄을 &&·;로 나눈 조각들 */
+export const segmentsOf = (command: string): string[] =>
+  (command.trim().split('\n')[0] ?? '').split(/&&|;/).map(x => x.trim()).filter(x => x !== '')
+
+/** 그 조각이 확인(테스트·빌드)인가: 첫 낱말(환경 변수 대입은 건너뛰고)이 읽기 명령이 아니고, 확인 낱말이 있다 */
+export const isCheckSegment = (seg: string): boolean => {
+  const head = seg.split(/\s+/).find(w => !isAssign(w)) ?? ''
+  return !LOOK_RE.test(head) && CHECK_RE.test(seg)
+}
+
+/** 테스트·빌드·타입 검사로 보이는 셸 명령(Bash·PowerShell): 나눈 조각 중 하나라도 확인이면 */
+export const isCheckCommand = (e: object): boolean => {
+  const { command } = e as { command?: unknown }
+  return typeof command === 'string' && segmentsOf(command).some(isCheckSegment)
+}
+
 /**
  * 오류의 열쇠: 같은 도구·같은 문구(경로·숫자를 지운)면 같은 실수.
  * 셸 명령은 첫 줄이 늘 "Exit code N"이라 그 줄은 건너뛰고, 명령 이름까지 넣는다(grep 일치 없음과 테스트 실패는 다른 실수다).
