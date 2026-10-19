@@ -1,6 +1,7 @@
 // 부서 예산. 부서마다 하루(최근 24시간) 비용 한도를 두고, 넘으면 하루에 한 번 알린다. 비용은 모델 API 정가로 어림한 달러로,
 // 끝낸 일의 기록(일한 것과 그 일의 결재)과 지금 일하는 사람이 쓴 것을 더한다. 순수 함수만 둔다.
 import type { Dept, HrBook, OfficeAgent } from '../types'
+import { tableLines } from './table'
 import { DEPT_INFO, DEPTS } from './hr'
 import { usdText } from './tokens'
 
@@ -55,11 +56,11 @@ export function budgetLines(book: HrBook, agents: readonly OfficeAgent[], now: n
   const set = DEPTS.filter(d => book.budgets[d] !== undefined)
   if (set.length === 0) return []
   return [
-    '하루 예산(최근 24시간, API 정가로 어림):',
-    ...set.map(d => {
+    '■ 하루 예산(최근 24시간, API 정가로 어림)',
+    ...tableLines(['부서', '쓴 비용', '예산', '비율', '상태'], set.map(d => {
       const budget = book.budgets[d] as number
       const spent = spentOf(book, agents, d, now)
-      return `  ${DEPT_INFO[d].ko}: ${usdText(spent)} / ${usdText(budget)}(${Math.round((spent / budget) * 100)}%)${spent >= budget ? ' · 초과' : ''}`
-    }),
+      return [DEPT_INFO[d].ko, usdText(spent), usdText(budget), `${Math.round((spent / budget) * 100)}%`, spent >= budget ? '초과' : '']
+    }), ['l', 'r', 'r', 'r', 'l']),
   ]
 }

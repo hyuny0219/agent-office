@@ -3,6 +3,7 @@
 import type { Dept, Employee, HrBook, JobRecord, Retiree } from '../types'
 import { DEPT_INFO, gradeOf, MAX_RETIRED, rankOf, REWORK_MS } from './hr'
 import { koNick } from './scene'
+import { tableLines } from './table'
 
 // ── 결재 정확도: 끝낸 일의 파일을 곧 다른 사람이 고쳤는지로 잰다 ─────────────
 
@@ -73,15 +74,16 @@ const approverName = (book: HrBook, nick: string): string => {
   return e === undefined ? nick : `${DEPT_INFO[e.dept].ko}장 ${nick}(${koNick(nick)})`
 }
 
-/** 보고서에 싣는 결재 정확도 줄(판정한 건이 없으면 빈 목록) */
+/** 보고서에 싣는 결재 정확도 표(판정한 건이 없으면 빈 목록) */
 export function accuracyLines(book: HrBook, now: number): string[] {
   const list = accuracyOf(book, now)
   if (list.length === 0) return []
   return [
-    '결재 정확도(지금까지, 끝낸 뒤 10분 안에 다른 사람이 같은 파일을 고쳤는지로 잼):',
-    ...list.map(a => `  ${approverName(book, a.approver)}: 판정 ${a.judged}건 · 맞음 ${a.right}(${pct(a.right, a.judged)}%)`
-      + `${a.missed > 0 ? ` · 놓친 승인 ${a.missed}` : ''}${a.doubtful > 0 ? ` · 빗나간 반려 ${a.doubtful}` : ''}`
-      + `${isRejectTrusted(book, a.approver, now) ? '' : ' · 반려 감점 유예(반려가 자주 빗나감)'}`),
+    '■ 결재 정확도(지금까지, 끝낸 뒤 10분 안에 다른 사람이 같은 파일을 고쳤는지로 잼)',
+    ...tableLines(['결재자', '판정', '맞음', '놓친 승인', '빗나간 반려', '비고'], list.map(a => [
+      approverName(book, a.approver), `${a.judged}건`, `${a.right}(${pct(a.right, a.judged)}%)`, `${a.missed}`, `${a.doubtful}`,
+      isRejectTrusted(book, a.approver, now) ? '' : '반려 감점 유예(반려가 자주 빗나감)',
+    ]), ['l', 'r', 'r', 'r', 'r', 'l']),
   ]
 }
 

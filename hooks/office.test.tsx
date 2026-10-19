@@ -10,7 +10,8 @@ import { agoText, cardOf, durationText, findEmployee, jobsIn, reportOf } from '.
 import { CONTROL_EVERY, effectText, enroll, markHit, MIN_CONTROL, MIN_MEMO, settle, verdictOf } from './trial'
 import { callKeyOf, errorKeyOf, isAlarm, isOvertime, isPolling, nudgeOf, OVERTIME_MS, stepOf } from './watch'
 import { fitParts, rowsOf, widthOf } from './view'
-import { chunksOf } from './menu'
+import { tableLines } from './table'
+import { logLinesOf } from './menu'
 import { activityOf, encodeCells, koNick, layoutOf, nickFor, Office, PLAN_ROWS } from './scene'
 import { addTokens, chargeReview, costText, modelLabel, priceOf, tokenDetail, tokensOf, tokenText, totalOf, usageOf, usdText } from './tokens'
 import { BUDGET_MS, budgetLines, deptNamed, dollarsOf, noticed, overrunsOf, spentOf } from './budget'
@@ -266,14 +267,14 @@ test('보고서·인사카드: 기간 안 일만 모아 부서별 실적·MVP·�
   expect(jobsIn(b, 'week', now)).toHaveLength(3)
   const today = reportOf(b, 'today', now)
   expect(today).toContain('에이전트 사무실 일간 보고 (최근 24시간)')
-  expect(today).toContain('전체: 업무 3건 · 완료 2 / 실패 1(완료율 67%)')
+  expect(today).toContain('업무 3건 · 완료 2 / 실패 1(완료율 67%)')
   expect(today).toContain('근무 2시간')
-  expect(today).toContain('개발팀: 2건 · 완료 2 / 실패 0(완료율 100%) · 평균 평가 B(8.0) · 도구 오류 3 · 테스트 실패 완료 1 · 근태 알림 1')
-  expect(today).toContain('조사팀: 1건')
+  expect(today).toContain('개발팀     2        2/0    100%  B(8.0)        3     -     -  테스트 실패 완료 1 · 근태 알림 1')
+  expect(today).toContain('조사팀     1        0/1      0%  D(-5.0)       0     -     -\n')
   expect(today).toContain('MVP: BEAR 곰 사원 (2건, 평가 합계 +16)')
-  expect(today).toContain('살펴볼 일(2건):')
-  expect(today).toContain('BEAR 고치기: 테스트·빌드 실패한 채 완료 · 근태 알림 1 · 평가 C(+3)')
-  expect(today).toContain('OWL 조사: 실패')
+  expect(today).toContain('■ 살펴볼 일(2건)')
+  expect(today).toMatch(/BEAR\s+고치기\s+C\(\+3\)\s+테스트·빌드 실패한 채 완료 · 근태 알림 1/)
+  expect(today).toMatch(/OWL\s+조사\s+D\(-5\)\s+실패/)
   expect(today).not.toContain('옛일')
   expect(reportOf(emptyBook(), 'week', now)).toContain('이 기간에 끝낸 업무가 없습니다.')
 
@@ -291,8 +292,8 @@ test('보고서·인사카드: 기간 안 일만 모아 부서별 실적·MVP·�
   expect(card).toContain('인사카드: BEAR 곰 — 개발팀 사원 · 팀장 (builder)')
   expect(card).toContain('대리까지')
   expect(card).toContain('+ 팀장 수당 600')
-  expect(card).toContain('최근 업무:')
-  expect(card).toContain('고치기 · 완료 D(-1) · 30분 · 도구 오류 3 · 테스트·빌드 실패한 채 완료 · 재작업 · 근태 알림 1')
+  expect(card).toContain('■ 최근 업무')
+  expect(card).toContain('30분 전  고치기  완료  D(-1)        30분     3     -  테스트·빌드 실패한 채 완료 · 재작업 · 근태 알림 1')
   expect(card).not.toContain('조사')
   expect(cardOf(b, findEmployee(b, 'OWL') as never, now)).toContain('아직 끝낸 업무가 없습니다')
 
@@ -472,8 +473,8 @@ test('서브에이전트가 뜨면 부서 직원에게 맡기고, 업무 지시�
   await $.turn.complete({ answer: '끝', durationMs: 1, isAborted: false, turnId: 'x', agentId: 'a1', reason: 'answer' })
   expect(toasts.join()).toContain('BEAR 사원 평가 S (+13)')
   const roster = JSON.stringify(await $.command.run({ command: 'office', args: 'hr', ...RUN }))
-  expect(roster).toContain('개발팀 — 팀장 BEAR(곰)')
-  expect(roster).toContain('완료 1 / 실패 0')
+  expect(roster).toMatch(/개발팀\s+BEAR 곰\s+사원·팀장/)
+  expect(roster).toMatch(/개발팀  BEAR 곰  사원·팀장 +[\d,]+만  S +1\/0 /)
   const report = JSON.stringify(await $.command.run({ command: 'office', args: 'report', ...RUN }))
   expect(report).toContain('업무 1건 · 완료 1 / 실패 0')
   expect(report).toContain('MVP: BEAR 곰')
@@ -483,7 +484,7 @@ test('서브에이전트가 뜨면 부서 직원에게 맡기고, 업무 지시�
   expect(JSON.stringify(await $.command.run({ command: 'office', args: 'hr ab', ...RUN }))).toContain('쓰는 법: /office hr ab on|off')
   const card = JSON.stringify(await $.command.run({ command: 'office', args: 'hr bear', ...RUN }))
   expect(card).toContain('인사카드: BEAR 곰')
-  expect(card).toContain('T139 빌드 · 완료 S(+13)')
+  expect(card).toMatch(/T139 빌드\s+완료\s+S\(\+13\)/)
   expect(JSON.stringify(await $.command.run({ command: 'office', args: 'hr NOBODY', ...RUN }))).toContain('NOBODY라는 직원이 없습니다')
 })
 
@@ -676,7 +677,7 @@ test('교육 효과 측정: 다섯 번째 업무는 실수 목록 없이 보내�
   await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 'v2', agentId: 'e2', reason: 'answer' })
   const roster = JSON.stringify(await $.command.run({ command: 'office', args: 'hr', ...RUN }))
   expect(roster).toContain('측정 중: 메모 2건 중 재발 1(50%) / 비교군 1건 중 재발 1(100%)')
-  expect(roster).toContain('교육 효과 측정: 켜짐')
+  expect(roster).toContain('교육 효과 측정 켜짐')
 
   const off = JSON.stringify(await $.command.run({ command: 'office', args: 'hr ab off', ...RUN }))
   expect(off).toContain('멈춥니다')
@@ -868,7 +869,7 @@ test('조직: 비슷한 일을 잘 끝낸 직원을 고르고, 결재는 후속 
   expect(isRejectTrusted(w, 'BEAR', later)).toBe(false)
   expect(isRejectTrusted(w, 'BEAR', at + 1)).toBe(true)
   expect(isRejectTrusted(w, 'BOSS', later)).toBe(true)
-  expect(accuracyLines(w, later).join('\n')).toContain('개발팀장 BEAR(곰): 판정 4건 · 맞음 1(25%) · 빗나간 반려 3 · 반려 감점 유예')
+  expect(accuracyLines(w, later).join('\n')).toMatch(/개발팀장 BEAR\(곰\)\s+4건\s+1\(25%\)\s+0\s+3\s+반려 감점 유예/)
   const bear = b.employees[0]!
   expect(decisionToast(bear, { kind: 'review', approver: 'BOSS', approverTitle: '대표 BOSS' }, '빌드', { verdict: 'rejected', notes: [] }, 0)).toContain('반려 (감점 유예')
   expect(decide(b, 'PANDA', 1, 'approved', 3, 'BEAR').book.log[0]?.approver).toBe('BEAR')
@@ -890,7 +891,7 @@ test('조직: 비슷한 일을 잘 끝낸 직원을 고르고, 결재는 후속 
   // 떠난 직원은 명부에 남고(인사카드), 예전 기록에는 빈 명부로 채운다
   expect(migrate(r.book)?.retired.map(e => [e.nick, e.retiredAt])).toEqual([['MOLE', now], ['SEAL', now]])
   expect([migrate({ employees: [] })?.retired, migrate({ employees: [] })?.isReorganizing]).toEqual([[], true])
-  expect(cardOf(r.book, findEmployee(r.book, 'mole')!, now)).toContain('퇴사 방금 · 권고사직')
+  expect(cardOf(r.book, findEmployee(r.book, 'mole')!, now)).toMatch(/퇴사\s+방금 · 권고사직/)
   // 떠난 직원이 다시 일을 맡았으면 새로 뽑지 않고 그 기록 그대로 복직
   const back = reinstate(r.book, 'SEAL')
   expect([back.employees.map(e => e.nick), back.retired.map(e => e.nick), 'retiredAt' in back.employees[2]!]).toEqual([['LYNX', 'BEAR', 'SEAL'], ['MOLE'], false])
@@ -954,10 +955,10 @@ test('조직: 비슷한 일을 한 직원에게 맡기고(까닭은 지시·메�
   await $.tool.call({ tool: 'Edit', file_path: '/r/README.md', old_string: 'c', new_string: 'd' })
   expect(toasts.join()).toContain('BOSS가 PANDA의 작업(README.md)을 다시 고쳤습니다')
   const report = JSON.stringify(await $.command.run({ command: 'office', args: 'report', ...RUN }))
-  expect(report).toContain('결재: 승인 1 · 반려 0 · 전결 0')
-  expect(report).toContain('개발팀장 BEAR(곰): 판정 1건 · 맞음 0(0%) · 놓친 승인 1')
+  expect(report).toContain('결재 승인 1 · 반려 0 · 전결 0')
+  expect(report).toMatch(/개발팀장 BEAR\(곰\)\s+1건\s+0\(0%\)\s+1\s+0/)
   const roster = JSON.stringify(await $.command.run({ command: 'office', args: 'hr', ...RUN }))
-  expect(roster).toContain('조직 개편: 켜짐')
+  expect(roster).toContain('조직 개편 켜짐')
   expect(roster).toContain('떠난 직원(1명)')
   expect(JSON.stringify(await $.command.run({ command: 'office', args: 'hr MOLE', ...RUN }))).toContain('· 퇴사 (builder)')
   expect(JSON.stringify(await $.command.run({ command: 'office', args: 'reorg', ...RUN }))).toContain('조직 개편: 켜짐')
@@ -1019,7 +1020,7 @@ test('/office hr off면 업무 지시를 건드리지 않고, 평가·명부는 
   expect(prompt).toBe('검토해')
   const roster = JSON.stringify(await $.command.run({ command: 'office', args: 'hr', ...RUN }))
   expect(roster).toContain('품질팀')
-  expect(roster).toContain('HAWK 매 · 사원')
+  expect(roster).toMatch(/HAWK 매\s+사원/)
 })
 
 test('데스크톱에서는 목록만 그린다', async ($, on) => {
@@ -1060,6 +1061,22 @@ test('설정이 비어 있으면 다른 패널에 끼어들지 않는다', async
   })
   const ui = await $.ui.mount({ plugin: 'agent-office', surface: 'terminal', component: 'Pane', requestId: 'host-pane', props: { ...PROPS, title: '다른 패널' }, viewport: { columns: 96, rows: 60 } })
   expect(JSON.stringify(await ui.drawn())).not.toContain('Raster')
+})
+
+test('표: 한글은 두 칸으로 세어 칸을 맞추고, 수는 오른쪽에, 줄 끝 빈칸은 남기지 않는다', () => {
+  expect(tableLines(['부서', '건수', '비고'], [['개발팀', '3', '재작업 1'], ['QA', '12', '']], ['l', 'r', 'l'])).toEqual([
+    '부서    건수  비고',
+    '──────  ────  ────────',
+    '개발팀     3  재작업 1',
+    'QA        12',
+  ])
+  // 셀 안의 줄바꿈·탭은 한 칸으로, 긴 글은 칸 수로 잘라 …, 모자란 칸은 빈칸, 끝 칸이 수면 채운다
+  expect(tableLines(['일', '수'], [['고치기\n\t둘째 줄 아주 긴 설명입니다', '7'], ['짧음']], ['l', 'r'], [12])).toEqual([
+    '일            수',
+    '────────────  ──',
+    '고치기 둘째…   7',
+    '짧음',
+  ])
 })
 
 test('패널 줄: 모델을 짧게 적고, 폭이 모자라면 덜 중요한 칸부터 줄이며, 누구·어디서·맡은 일은 남긴다', () => {
@@ -1194,16 +1211,17 @@ test('토큰: 일하며 부른 모델의 토큰을 패널 줄에 보이고, 끝�
   await $.tool.call({ tool: 'Agent', description: '고치기', prompt: '버그를 고쳐', subagent_type: 'builder' } as never)
   await $.tool.call({ tool: 'Read', file_path: '/r/x.ts' } as never)
 
-  expect(JSON.stringify(await $.command.run({ command: 'office', args: 'hr', ...RUN }))).toContain('· 토큰 20.0k($0.02) · 경력')
+  expect(JSON.stringify(await $.command.run({ command: 'office', args: 'hr', ...RUN }))).toMatch(/BEAR 곰  사원·팀장 +[\d,]+만  S +1\/0 +0  20\.0k\(\$0\.02\) +13/)
   const card = JSON.stringify(await $.command.run({ command: 'office', args: 'hr BEAR', ...RUN }))
-  expect(card).toContain('토큰 누적 20.0k(입력 2.0k · 출력 1.0k · 캐시 읽기 16.0k · 캐시 쓰기 1.0k) · 비용 약 $0.02 · 한 건 평균 20.0k')
-  expect(card).toContain('· 토큰 20.0k($0.02)')
+  expect(card).toMatch(/토큰 누적\s+20\.0k\(/)
+  expect(card).toContain('20.0k(입력 2.0k · 출력 1.0k · 캐시 읽기 16.0k · 캐시 쓰기 1.0k) · 비용 약 $0.02 · 한 건 평균 20.0k')
+  expect(card).toMatch(/\s20\.0k\(\$0\.02\)/)
   const report = JSON.stringify(await $.command.run({ command: 'office', args: 'report', ...RUN }))
   // 결재(haiku = 하이쿠 5.5)는 400×$0.1 + 100×$0.5 = $0.00009
-  expect(report).toContain('토큰: 업무 20.0k($0.02) · 결재 500($0.0001) · 비용 합계 약 $0.02(API 정가로 어림')
-  expect(report).toContain('개발팀: 1건')
-  expect(report).toContain('토큰(결재 포함) 20.5k($0.02)')
-  expect(report).toContain('토큰을 많이 쓴 직원: BEAR 20.0k($0.02, 1건, 한 건 20.0k)')
+  expect(report).toContain('비용 약 $0.02 · 토큰 업무 20.0k($0.02) · 결재 500($0.0001)(API 정가로 어림')
+  expect(report).toContain('■ 부서별(토큰·비용은 결재 포함)')
+  expect(report).toContain('개발팀     1        1/0    100%  S(13.0)       0  20.5k  $0.02')
+  expect(report).toMatch(/BEAR 곰\s+20\.0k\s+\$0\.02\s+1\s+20\.0k/)
 })
 
 test('예산: 부서 이름·금액을 읽고, 최근 24시간 비용(끝낸 일과 결재, 일하는 중인 사람)을 재며, 넘으면 하루에 한 번만 고른다', () => {
@@ -1228,7 +1246,9 @@ test('예산: 부서 이름·금액을 읽고, 최근 24시간 비용(끝낸 일
   expect(overrunsOf(told, more, now + 1000)).toEqual([])
   expect(overrunsOf(told, more, now + BUDGET_MS + 1).length).toBe(0) // 하루 지나면 옛 기록도 빠져 비용이 줄어든다
   expect(overrunsOf(told, [agent('x9', { tokens: use(2) })], now + BUDGET_MS + 1).map(o => o.dept)).toEqual(['dev'])
-  expect(budgetLines(b, more, now)).toEqual(['하루 예산(최근 24시간, API 정가로 어림):', '  개발팀: $1.10 / $1.00(110%) · 초과'])
+  const shown = budgetLines(b, more, now)
+  expect(shown[0]).toBe('■ 하루 예산(최근 24시간, API 정가로 어림)')
+  expect(shown[3]).toMatch(/^개발팀\s+\$1\.10\s+\$1\.00\s+110%\s+초과$/)
   expect(budgetLines(emptyBook(), [], now)).toEqual([])
 
   // 저장된 예산은 모르는 부서·0 이하·수가 아닌 값을 버린다
@@ -1283,7 +1303,7 @@ test('예산: /office budget으로 정하고 끄며, 일하는 직원이 한도�
   expect(toasts.join()).toContain('개발팀 하루 예산 초과: 최근 24시간 $40.00 / 예산 $30.00(133%)')
   await step('c1')
   expect(toasts.filter(t => t.includes('예산 초과')).length).toBe(1)
-  expect(await run('report')).toContain('개발팀: $60.00 / $30.00(200%) · 초과')
+  expect(await run('report')).toMatch(/개발팀\s+\$60\.00\s+\$30\.00\s+200%\s+초과/)
   expect(await run('budget')).toContain('하루 예산(최근 24시간')
   // 한도를 새로 정하면 다시 알릴 수 있다
   await run('budget dev 50')
@@ -1331,21 +1351,30 @@ for (const surface of ['terminal', 'desktop'] as const) {
     await $.agent.spawn({ tool_use_id: 't1', prompt: '버그를 고쳐', description: '고치기', subagentType: 'builder', ...SPAWN })
     await $.command.run({ command: 'office', args: '', ...RUN })
     const ui = await $.ui.mount({ plugin: 'agent-office', surface, component: 'Pane', requestId: 'agent-office', props: PROPS, viewport: { columns: 96, rows: 50 } })
-    const notices = () => logged
+    // 누를 때마다 남긴 줄들을 한 글로 모은다
+    const marks: number[] = []
+    const pressLog = async (key: string) => {
+      marks.push(logged.length)
+      await ui.press({ key })
+    }
+    const notices = () => marks.map((m, i) => ({ to: logged[m]?.to, text: logged.slice(m, marks[i + 1] ?? logged.length).map(x => x.text).join('\n') }))
 
-    await ui.press({ key: 'menu-hr' })
+    await pressLog('menu-hr')
     expect(notices()[0]?.to).toBe('transcript')
     expect(notices()[0]?.text).toContain('에이전트 사무실 인사 기록')
+    // 알림 한 줄은 줄바꿈을 그리지 못한다: 한 줄씩 남기고 빈 줄은 뺀다
+    expect(logged.length).toBeGreaterThan(3)
+    expect(logged.every(x => !x.text.includes('\n') && x.text.trim() !== '')).toBe(true)
     // 직원 줄을 누르면 그 직원의 인사카드
     const nick = (await ui.find({ key: 'row-c1' }))?.text?.split(' ')[0] ?? ''
-    await ui.press({ key: 'row-c1' })
+    await pressLog('row-c1')
     expect(notices()[1]?.text).toContain(`인사카드: ${nick} `)
-    await ui.press({ key: 'menu-week' })
+    await pressLog('menu-week')
     expect(notices()[2]?.text).toContain('주간 보고')
-    await ui.press({ key: 'menu-budget' })
+    await pressLog('menu-budget')
     expect(notices()[3]?.text).toContain('부서 예산이 없습니다')
 
-    await ui.press({ key: 'menu-today' })
+    await pressLog('menu-today')
     expect(notices()[4]?.text).toContain('일간 보고')
     // BOSS 줄은 인사 기록이 없어 누를 수 없다
     await expect(ui.press({ key: 'row-main' })).rejects.toThrow()
@@ -1355,17 +1384,17 @@ for (const surface of ['terminal', 'desktop'] as const) {
     expect(await ui.find({ key: 'set-approval' })).toBeUndefined()
     await ui.press({ key: 'menu-settings' })
     expect((await ui.find({ key: 'set-approval' }))?.text).toBe('결재 켜짐')
-    await ui.press({ key: 'set-approval' })
+    await pressLog('set-approval')
     expect((await ui.find({ key: 'set-approval' }))?.text).toBe('결재 꺼짐')
     expect(notices()[5]?.text).toBe('결재를 멈춥니다. 보고와 계획은 결재 없이 넘어갑니다.')
-    await ui.press({ key: 'set-approval' })
+    await pressLog('set-approval')
     expect((await ui.find({ key: 'set-approval' }))?.text).toBe('결재 켜짐')
     expect(notices()[6]?.text).toContain('팀장이 결재하고')
     // 나머지 셋도 실제 설정을 뒤집는다(명부 머리에 보이는 값으로 확인)
     for (const key of ['set-reorg', 'set-coach', 'set-trial']) await ui.press({ key })
     expect((await ui.find({ key: 'set-reorg' }))?.text).toBe('조직 개편 꺼짐')
     const head = String((await $.command.run({ command: 'office', args: 'hr', ...RUN }) as { text?: string }).text ?? '')
-    expect(head).toContain('업무 지시 인사 메모: 꺼짐 · 교육 효과 측정: 꺼짐 · 결재: 켜짐 · 조직 개편: 꺼짐')
+    expect(head).toContain('인사 메모 꺼짐 · 교육 효과 측정 꺼짐 · 결재 켜짐 · 조직 개편 꺼짐')
     // 슬래시 명령으로 바꿔도 패널 표시가 따라온다
     await $.command.run({ command: 'office', args: 'reorg on', ...RUN })
     expect((await ui.find({ key: 'set-reorg' }))?.text).toBe('조직 개편 켜짐')
@@ -1374,17 +1403,8 @@ for (const surface of ['terminal', 'desktop'] as const) {
   })
 }
 
-test('메뉴: 긴 답은 줄 단위로 2000자 안쪽 덩어리로 나눠 남긴다', () => {
-  expect(chunksOf('a\nb\nc', 3)).toEqual(['a\nb', 'c'])
-  expect(chunksOf('abcdef\nx', 3)).toEqual(['abc', 'def', 'x'])
-  // 빈 줄(경계·맨 앞·맨 끝)도 빠지지 않고, 꼭 맞는 길이는 한 덩어리
-  expect(chunksOf('ab\n\ncd', 3)).toEqual(['ab\n', 'cd'])
-  expect(chunksOf('\na\n', 5)).toEqual(['\na\n'])
-  expect(chunksOf('a\nb', 3)).toEqual(['a\nb'])
-  for (const t of ['ab\n\ncd', '\n\nabc\n\n', 'a\n\nb\nc\n\n']) expect(chunksOf(t, 3).join('\n')).toBe(t)
-  expect(chunksOf('')).toEqual([])
-  const long = Array.from({ length: 100 }, (_, i) => `${i} ${'가'.repeat(40)}`).join('\n')
-  const parts = chunksOf(long)
-  expect(parts.every(p => p.length <= 2000)).toBe(true)
-  expect(parts.join('\n')).toBe(long)
+test('메뉴: 답은 한 줄씩(빈 줄은 빼고) 알림 줄로 남기고, 너무 긴 줄은 끊는다', () => {
+  expect(logLinesOf('a\n\n  \nb')).toEqual(['a', 'b'])
+  expect(logLinesOf('abcdefg\nx', 3)).toEqual(['abc', 'def', 'g', 'x'])
+  expect(logLinesOf('')).toEqual([])
 })

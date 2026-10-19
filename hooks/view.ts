@@ -10,7 +10,10 @@ import { encodeCells, isMeeting, koNick, Office, seated, shortType } from './sce
 import type { Layout } from './scene'
 import { syncStatus } from './flow'
 import { costText, modelLabel, totalOf, useText } from './tokens'
+import { widthOf } from './table'
 import { agentsOf, hrOf, leadsOf } from './store'
+
+export { widthOf }
 
 export const RASTER = 'office'
 /** 평면도 아래에 보이는 메신저 줄 수 */
@@ -33,17 +36,6 @@ const streakMax = (a: OfficeAgent): number => Math.max(0, ...Object.values(a.err
 
 /** nick: 누르면 그 직원의 인사카드(BOSS와 아직 인사 기록에 없는 사람은 null) */
 export type Row = { key: string; text: string; isOff: boolean; isBad: boolean; nick: string | null }
-
-/** 터미널에서 차지하는 칸 수(한글·한자·전각·이모지는 두 칸) */
-export function widthOf(s: string): number {
-  let n = 0
-  for (const ch of s) {
-    const c = ch.codePointAt(0) ?? 0
-    n += (c >= 0x1100 && c <= 0x115f) || (c >= 0x2e80 && c <= 0xa4cf) || (c >= 0xac00 && c <= 0xd7a3)
-      || (c >= 0xf900 && c <= 0xfaff) || (c >= 0xfe30 && c <= 0xfe4f) || (c >= 0xff00 && c <= 0xff60) || (c >= 0xffe0 && c <= 0xffe6) || (c >= 0x1f300 && c <= 0x1faff) ? 2 : 1
-  }
-  return n
-}
 
 /** 맡은 일 설명에 적어도 남겨 둘 칸(줄이 길면 끝이 잘린다) */
 const DESC_KEEP = 16

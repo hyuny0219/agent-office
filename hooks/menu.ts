@@ -22,37 +22,30 @@ export const TOGGLES = [
   { key: 'set-trial', label: '교육 효과 측정', isOn: (b: HrBook) => b.isTrialing, args: 'hr ab' },
 ] as const
 
-/** 터미널이 한 줄(로그 한 칸)에 그리는 글자 수 */
+/** 터미널이 알림 한 줄에 그리는 글자 수 */
 const LOG_MAX = 2000
 
-/** 긴 글을 줄 단위로 LOG_MAX 안쪽 덩어리로 나눈다(빈 줄도 그대로, 한 줄이 넘치면 그 줄을 max씩 끊는다) */
-export function chunksOf(text: string, max = LOG_MAX): string[] {
-  if (text === '') return []
-  const lines = text.split('\n').flatMap(l => (l.length <= max ? [l] : Array.from({ length: Math.ceil(l.length / max) }, (_, i) => l.slice(i * max, (i + 1) * max))))
-  const out: string[] = []
-  let buf: string[] = []
-  let size = -1
-  for (const line of lines) {
-    if (buf.length > 0 && size + 1 + line.length > max) {
-      out.push(buf.join('\n'))
-      buf = []
-      size = -1
-    }
-    buf.push(line)
-    size += 1 + line.length
-  }
-  if (buf.length > 0) out.push(buf.join('\n'))
-  return out
+/**
+ * 알림 줄로 남길 줄들: 알림 한 줄은 줄바꿈을 그리지 못하므로 한 줄씩 나누고, 빈 줄은 빼며(줄마다 머리가 붙어 빈 줄도 한 줄을 차지한다),
+ * 너무 긴 줄은 max씩 끊는다
+ */
+export function logLinesOf(text: string, max = LOG_MAX): string[] {
+  return text.split('\n').filter(l => l.trim() !== '')
+    .flatMap(l => {
+      // 글자(코드포인트) 단위로 끊는다(이모지를 반으로 자르지 않도록)
+      const chars = Array.from(l)
+      return chars.length <= max ? [l] : Array.from({ length: Math.ceil(chars.length / max) }, (_, i) => chars.slice(i * max, (i + 1) * max).join(''))
+    })
 }
 
 /**
- * /office 하위 명령의 답을 메인 채팅창에 흐린 알림 줄로 남긴다(모델은 읽지 않는다). 누름에서 부르므로 던지지 않는다.
+ * /office 하위 명령의 답을 메인 채팅창에 흐린 알림 줄로 한 줄씩 남긴다(모델은 읽지 않는다). 누름에서 부르므로 던지지 않는다.
  * ($.session.append의 system 줄은 기록에만 남고 터미널에 그려지지 않았고, $.command.run은 이 plugin의 명령 hook을 건너뛴다)
  */
 export async function postAnswer($: EngineInterface, args: string) {
   try {
     const text = await answer($, args)
-    if (text !== null) for (const part of chunksOf(text)) $.ui.log(part)
+    if (text !== null) for (const line of logLinesOf(text)) $.ui.log(line)
   } catch {
     $.ui.toast(`/office ${args}를 보이지 못했습니다`)
   }
