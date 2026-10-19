@@ -10,12 +10,11 @@ import { agoText, cardOf, durationText, findEmployee, jobsIn, reportOf } from '.
 import { CONTROL_EVERY, effectText, enroll, markHit, MIN_CONTROL, MIN_MEMO, settle, verdictOf } from './trial'
 import { callKeyOf, errorKeyOf, isAlarm, isOvertime, isPolling, nudgeOf, OVERTIME_MS, stepOf } from './watch'
 import { fitParts, rowsOf, widthOf } from './view'
-import { tableLines } from './table'
-import { logLinesOf } from './menu'
+import { mdOf, tableLines, textOf } from './table'
 import { activityOf, encodeCells, koNick, layoutOf, nickFor, Office, PLAN_ROWS } from './scene'
 import { addTokens, chargeReview, costText, modelLabel, priceOf, tokenDetail, tokensOf, tokenText, totalOf, usageOf, usdText } from './tokens'
 import { BUDGET_MS, budgetLines, deptNamed, dollarsOf, noticed, overrunsOf, spentOf } from './budget'
-import { accuracyLines, accuracyOf, FOLLOW_MS, followUp, IDLE_MS, isRejectTrusted, isSimilar, judgeOf, pickFor, reinstate, reorgOf } from './org'
+import { accuracyBlocks, accuracyOf, FOLLOW_MS, followUp, IDLE_MS, isRejectTrusted, isSimilar, judgeOf, pickFor, reinstate, reorgOf } from './org'
 
 const agent = (id: string, over: Partial<OfficeAgent> = {}): OfficeAgent => ({
   id, type: 'builder', nick: 'BEAR', dept: 'dev', description: '빌드', model: null, startedAt: 0, endedAt: null, activity: 'type', tool: 'Edit', tools: 3, ...over,
@@ -869,7 +868,7 @@ test('조직: 비슷한 일을 잘 끝낸 직원을 고르고, 결재는 후속 
   expect(isRejectTrusted(w, 'BEAR', later)).toBe(false)
   expect(isRejectTrusted(w, 'BEAR', at + 1)).toBe(true)
   expect(isRejectTrusted(w, 'BOSS', later)).toBe(true)
-  expect(accuracyLines(w, later).join('\n')).toMatch(/개발팀장 BEAR\(곰\)\s+4건\s+1\(25%\)\s+0\s+3\s+반려 감점 유예/)
+  expect(textOf(accuracyBlocks(w, later))).toMatch(/개발팀장 BEAR\(곰\)\s+4건\s+1\(25%\)\s+0\s+3\s+반려 감점 유예/)
   const bear = b.employees[0]!
   expect(decisionToast(bear, { kind: 'review', approver: 'BOSS', approverTitle: '대표 BOSS' }, '빌드', { verdict: 'rejected', notes: [] }, 0)).toContain('반려 (감점 유예')
   expect(decide(b, 'PANDA', 1, 'approved', 3, 'BEAR').book.log[0]?.approver).toBe('BEAR')
@@ -1332,7 +1331,7 @@ test('토큰: v0.10이 남긴 사무실 사람들의 토큰(달러 없음)은 �
 })
 
 for (const surface of ['terminal', 'desktop'] as const) {
-  test(`메뉴(${surface}): 메뉴와 직원 줄을 누르면 그 내용이 메인 채팅창에 흐린 알림 줄로 남고, 설정은 패널에서 켜고 끈다`, async ($, on) => {
+  test(`메뉴(${surface}): 사무실 패널의 메뉴 버튼·직원 줄은 메뉴 화면을 열고, 메뉴 화면은 1~5로 고른 것을 패널 안에 표로 보이며, 설정은 그 자리에서 켜고 끈다`, async ($, on) => {
     const store = new Map<string, unknown>()
     on('store.get', (_$, e) => ({ value: store.get(e.key) }))
     on('store.set', (_$, e) => {
@@ -1340,71 +1339,83 @@ for (const surface of ['terminal', 'desktop'] as const) {
       return { value: undefined }
     })
     on('clock.now', () => ({ value: 5000 }))
-    on('ui.open', () => ({ value: { isPlaced: true } }))
-    on('agent.spawn', () => ({ model: 'm', agentId: 'c1' }))
-    on('agent.list', () => ({ value: [{ id: 'c1', description: '고치기', type: 'builder', status: 'running' }] }))
-    const logged: { to: string; text: string }[] = []
-    on('ui.log', (_$, e) => {
-      logged.push({ to: e.to, text: e.text })
+    const opened: string[] = []
+    on('ui.open', (_$, e) => {
+      opened.push(e.id)
+      return { value: { isPlaced: true } }
+    })
+    const closed: string[] = []
+    on('ui.close', (_$, e) => {
+      closed.push(e.id)
       return { value: undefined }
     })
+    on('agent.spawn', () => ({ model: 'm', agentId: 'c1' }))
+    on('agent.list', () => ({ value: [{ id: 'c1', description: '고치기', type: 'builder', status: 'running' }] }))
     await $.agent.spawn({ tool_use_id: 't1', prompt: '버그를 고쳐', description: '고치기', subagentType: 'builder', ...SPAWN })
     await $.command.run({ command: 'office', args: '', ...RUN })
-    const ui = await $.ui.mount({ plugin: 'agent-office', surface, component: 'Pane', requestId: 'agent-office', props: PROPS, viewport: { columns: 96, rows: 50 } })
-    // 누를 때마다 남긴 줄들을 한 글로 모은다
-    const marks: number[] = []
-    const pressLog = async (key: string) => {
-      marks.push(logged.length)
-      await ui.press({ key })
-    }
-    const notices = () => marks.map((m, i) => ({ to: logged[m]?.to, text: logged.slice(m, marks[i + 1] ?? logged.length).map(x => x.text).join('\n') }))
-
-    await pressLog('menu-hr')
-    expect(notices()[0]?.to).toBe('transcript')
-    expect(notices()[0]?.text).toContain('에이전트 사무실 인사 기록')
-    // 알림 한 줄은 줄바꿈을 그리지 못한다: 한 줄씩 남기고 빈 줄은 뺀다
-    expect(logged.length).toBeGreaterThan(3)
-    expect(logged.every(x => !x.text.includes('\n') && x.text.trim() !== '')).toBe(true)
-    // 직원 줄을 누르면 그 직원의 인사카드
-    const nick = (await ui.find({ key: 'row-c1' }))?.text?.split(' ')[0] ?? ''
-    await pressLog('row-c1')
-    expect(notices()[1]?.text).toContain(`인사카드: ${nick} `)
-    await pressLog('menu-week')
-    expect(notices()[2]?.text).toContain('주간 보고')
-    await pressLog('menu-budget')
-    expect(notices()[3]?.text).toContain('부서 예산이 없습니다')
-
-    await pressLog('menu-today')
-    expect(notices()[4]?.text).toContain('일간 보고')
+    const office = await $.ui.mount({ plugin: 'agent-office', surface, component: 'Pane', requestId: 'agent-office', props: PROPS, viewport: { columns: 96, rows: 50 } })
+    // 사무실 패널에는 메뉴 버튼 하나만: 누르면 메뉴 화면을 연다
+    expect(await office.find({ key: 'menu-hr' })).toBeUndefined()
+    await office.press({ key: 'open-menu' })
+    expect(opened.at(-1)).toBe('agent-office-menu')
+    const menu = await $.ui.mount({ plugin: 'agent-office', surface, component: 'Pane', requestId: 'agent-office-menu', props: { ...PROPS, title: '사무실 메뉴' }, viewport: { columns: 96, rows: 50 } })
+    const body = async () => String((await menu.find({ key: 'menu-body' }) as { text?: unknown } | undefined)?.text ?? '')
+    // 처음엔 인사 명부: 마크다운 표
+    expect(await body()).toContain('## 에이전트 사무실 인사 기록')
+    expect(await body()).toContain('| 부서 | 직원 | 직급 |')
+    await menu.press({ key: 'menu-week' })
+    expect(await body()).toContain('## 에이전트 사무실 주간 보고')
+    await menu.press({ key: 'menu-today' })
+    expect(await body()).toContain('## 에이전트 사무실 일간 보고')
+    await menu.press({ key: 'menu-budget' })
+    expect(await body()).toContain('부서 예산이 없습니다')
+    // 직원 줄을 누르면 메뉴 화면에 그 직원의 인사카드, ← 인사 명부로 돌아간다
+    const nick = (await office.find({ key: 'row-c1' }))?.text?.split(' ')[0] ?? ''
+    await office.press({ key: 'row-c1' })
+    expect(await body()).toContain(`## 인사카드: ${nick} `)
+    await menu.press({ key: 'card-back' })
+    expect(await body()).toContain('## 에이전트 사무실 인사 기록')
+    // 명부 아래 인사카드 버튼
+    await menu.press({ key: `card-${nick}` })
+    expect(await body()).toContain(`## 인사카드: ${nick} `)
     // BOSS 줄은 인사 기록이 없어 누를 수 없다
-    await expect(ui.press({ key: 'row-main' })).rejects.toThrow()
-    expect(notices()).toHaveLength(5)
+    await expect(office.press({ key: 'row-main' })).rejects.toThrow()
 
-    // 설정: 펼치면 켜고 끄는 버튼이 보이고, 누르면 바뀌며 그 한 줄이 채팅창에 남는다
-    expect(await ui.find({ key: 'set-approval' })).toBeUndefined()
-    await ui.press({ key: 'menu-settings' })
-    expect((await ui.find({ key: 'set-approval' }))?.text).toBe('결재 켜짐')
-    await pressLog('set-approval')
-    expect((await ui.find({ key: 'set-approval' }))?.text).toBe('결재 꺼짐')
-    expect(notices()[5]?.text).toBe('결재를 멈춥니다. 보고와 계획은 결재 없이 넘어갑니다.')
-    await pressLog('set-approval')
-    expect((await ui.find({ key: 'set-approval' }))?.text).toBe('결재 켜짐')
-    expect(notices()[6]?.text).toContain('팀장이 결재하고')
-    // 나머지 셋도 실제 설정을 뒤집는다(명부 머리에 보이는 값으로 확인)
-    for (const key of ['set-reorg', 'set-coach', 'set-trial']) await ui.press({ key })
-    expect((await ui.find({ key: 'set-reorg' }))?.text).toBe('조직 개편 꺼짐')
+    // 설정: 그 자리에서 켜고 끄고, 명부 머리에도 반영된다
+    expect(await menu.find({ key: 'set-approval' })).toBeUndefined()
+    await menu.press({ key: 'menu-settings' })
+    expect((await menu.find({ key: 'set-approval' }))?.text).toBe('[켜짐] 결재')
+    await menu.press({ key: 'set-approval' })
+    expect((await menu.find({ key: 'set-approval' }))?.text).toBe('[꺼짐] 결재')
+    await menu.press({ key: 'set-approval' })
+    expect((await menu.find({ key: 'set-approval' }))?.text).toBe('[켜짐] 결재')
+    for (const key of ['set-reorg', 'set-coach', 'set-trial']) await menu.press({ key })
+    expect((await menu.find({ key: 'set-reorg' }))?.text).toBe('[꺼짐] 조직 개편')
     const head = String((await $.command.run({ command: 'office', args: 'hr', ...RUN }) as { text?: string }).text ?? '')
     expect(head).toContain('인사 메모 꺼짐 · 교육 효과 측정 꺼짐 · 결재 켜짐 · 조직 개편 꺼짐')
-    // 슬래시 명령으로 바꿔도 패널 표시가 따라온다
+    // 슬래시 명령으로 바꿔도 버튼 표시가 따라온다
     await $.command.run({ command: 'office', args: 'reorg on', ...RUN })
-    expect((await ui.find({ key: 'set-reorg' }))?.text).toBe('조직 개편 켜짐')
-    await ui.press({ key: 'menu-settings' })
-    expect(await ui.find({ key: 'set-approval' })).toBeUndefined()
+    expect((await menu.find({ key: 'set-reorg' }))?.text).toBe('[켜짐] 조직 개편')
+    // /office menu(대소문자 무관)로도 열고, 닫기로 닫는다
+    await $.command.run({ command: 'office', args: 'MENU', ...RUN })
+    expect(opened.filter(x => x === 'agent-office-menu').length).toBeGreaterThanOrEqual(3)
+    await menu.press({ key: 'menu-close' })
+    expect(closed).toEqual(['agent-office-menu'])
   })
 }
 
-test('메뉴: 답은 한 줄씩(빈 줄은 빼고) 알림 줄로 남기고, 너무 긴 줄은 끊는다', () => {
-  expect(logLinesOf('a\n\n  \nb')).toEqual(['a', 'b'])
-  expect(logLinesOf('abcdefg\nx', 3)).toEqual(['abc', 'def', 'g', 'x'])
-  expect(logLinesOf('')).toEqual([])
+test('문서 블록: 같은 내용을 글(칸 맞춘 표)과 마크다운(표·제목·글머리)으로 그린다', () => {
+  const blocks = [
+    { t: 'title', text: '보고' }, { t: 'line', text: '업무 2건' }, { t: 'gap' }, { t: 'section', text: '부서별' },
+    { t: 'table', head: ['부서', '건수'], rows: [['개발팀', '2'], ['a|b', '1']], align: ['l', 'r'] },
+    { t: 'bullet', text: '하나' }, { t: 'bullet', text: '둘' }, { t: 'field', label: '경력', value: '13' },
+  ] as const
+  expect(textOf(blocks)).toBe(['보고', '업무 2건', '', '■ 부서별', '부서    건수', '──────  ────', '개발팀     2', 'a|b        1', '- 하나', '- 둘', '경력        13'].join('\n'))
+  expect(mdOf(blocks)).toBe(['## 보고', '업무 2건', '### 부서별', '| 부서 | 건수 |\n| --- | ---: |\n| 개발팀 | 2 |\n| a\\|b | 1 |', '- 하나\n- 둘', '**경력** 13'].join('\n\n'))
+  // 마크다운: 제어 문자는 지우고 문법 글자는 이스케이프하며, 이름표는 줄바꿈으로 잇고, 빈 셀·잘린 셀도 표 모양을 지킨다
+  expect(mdOf([{ t: 'line', text: 'fix __init__ *now*\x1b[31m!\x07' }])).toBe('fix \\_\\_init\\_\\_ \\*now\\*!')
+  expect(mdOf([{ t: 'field', label: '경력', value: '13' }, { t: 'field', label: '연봉', value: '4,980만원' }])).toBe('**경력** 13  \n**연봉** 4,980만원')
+  expect(mdOf([{ t: 'table', head: ['업무', '수'], rows: [['아주 긴 업무 설명입니다\n둘째', ''], ['짧음']], align: ['l', 'r'], max: [10] }]))
+    .toBe('| 업무 | 수 |\n| --- | ---: |\n| 아주 긴… |  |\n| 짧음 |  |')
+  expect(mdOf([{ t: 'line', text: '- 줄' }, { t: 'bullet', text: '항목' }])).toBe('\\- 줄\n\n- 항목')
 })

@@ -10,9 +10,10 @@ import { activityOf, layoutOf } from './scene'
 import { answer, COMMAND } from './commands'
 import { awaitApproval, checkBudget, checkFollowUp, checkRework, EDIT_TOOLS, fileOf, isCheckCommand, papers, reorganize, reviewPlan, syncStatus, takeNotes, watch } from './flow'
 import { usageOf } from './tokens'
-import { flip, MENU, postAnswer, SETTINGS, TOGGLES } from './menu'
+import { cardView, flip, MENU, MENU_PANE, MENU_TITLE, nickOfView, TOGGLES, viewBlocks } from './menu'
+import { mdOf } from './table'
 import { isShell } from './watch'
-import { admit, agentsOf, chargeAgent, readSettingsOpen, toggleSettingsOpen, ensure, fresh, hold, hrOf, MEET_MS, meet, nickOfId, patch, readFeed, release, save, saveHr, speak, staff, watchAgents } from './store'
+import { admit, agentsOf, chargeAgent, readMenuView, setMenuView, ensure, fresh, hold, hrOf, MEET_MS, meet, nickOfId, patch, readFeed, release, save, saveHr, speak, staff, watchAgents } from './store'
 import { cellsOf, dropOffice, feedRowsOf, FRAME_MS, markPaneShown, officeAt, RASTER, rowsOf, tick } from './view'
 
 const PANE = 'agent-office'
@@ -36,6 +37,10 @@ export const register: Register = (on, options) => {
   })
 
   on('command.run', { command: 'office' }, async ($, e) => {
+    if (e.args.trim().toLowerCase() === 'menu') {
+      const opened = await $.ui.open({ id: MENU_PANE, title: MENU_TITLE, focus: true, closeOnEscape: true })
+      return { text: opened.isPlaced ? '사무실 메뉴를 열었습니다. 1 인사 명부 · 2 일간 보고 · 3 주간 보고 · 4 예산 · 5 설정' : '사무실 메뉴가 아직 그려지지 않았습니다(창이 좁으면 넓혀 주세요).' }
+    }
     const text = await answer($, e.args)
     // 설정을 바꾼 명령이면 패널의 켜짐·꺼짐 표시를 다시 그린다(설정은 상태가 아니라 저장소에 있다)
     if (text !== null) $.ui.invalidate('ui.render')
@@ -210,22 +215,15 @@ export const register: Register = (on, options) => {
     const lines = rowsOf(agents, b, now, e.surface === 'terminal' ? (e.viewport?.columns ?? 80) - 2 : Infinity)
     const feedLines = feedRowsOf(feed, now)
 
-    const isSettingsOpen = await readSettingsOpen($)
     const { Box, Text, Button } = $.ui.resolve(e)
-    // 메뉴와 직원 줄은 누르면 그 내용을 메인 채팅창에 알림으로 남긴다(/office 하위 명령과 같은 글)
+    // 메뉴 화면은 따로 연다. 직원 줄을 누르면 메뉴 화면에 그 직원의 인사카드를 띄운다
+    const openMenu = async (view?: string) => {
+      if (view !== undefined) await setMenuView($, view)
+      await $.ui.open({ id: MENU_PANE, title: MENU_TITLE, focus: true, closeOnEscape: true })
+    }
     const menu = (
-      <Box flexDirection="column">
-        <Box columnGap={2} flexWrap="wrap">
-          {MENU.map(m => <Button key={m.key} hotkey={m.hotkey} plain onPress={() => postAnswer($, m.args)}>{m.label}</Button>)}
-          <Button key={SETTINGS.key} hotkey={SETTINGS.hotkey} plain onPress={() => toggleSettingsOpen($).catch(() => undefined)}>{isSettingsOpen ? '설정 접기' : '설정'}</Button>
-        </Box>
-        {isSettingsOpen && (
-          <Box columnGap={2} flexWrap="wrap">
-            {TOGGLES.map(t => (
-              <Button key={t.key} plain onPress={() => flip($, t.key).catch(() => undefined)}>{`${t.label} ${t.isOn(b) ? '켜짐' : '꺼짐'}`}</Button>
-            ))}
-          </Box>
-        )}
+      <Box>
+        <Button key="open-menu" hotkey="m" plain onPress={() => openMenu().catch(() => undefined)}>메뉴(인사 명부·보고서·예산·설정)</Button>
       </Box>
     )
     const isTerminal = e.surface === 'terminal'
@@ -233,7 +231,7 @@ export const register: Register = (on, options) => {
       <Box key={l.nick === null ? l.key : `${l.key}-line`}>
         {l.nick === null
           ? <Text dimColor={l.isOff} color={l.isBad ? 'red' : undefined} wrap={isTerminal ? 'truncate-end' : undefined}>{l.text}</Text>
-          : <Button key={l.key} plain onPress={() => postAnswer($, `hr ${l.nick}`)}>
+          : <Button key={l.key} plain onPress={() => openMenu(cardView(l.nick ?? '')).catch(() => undefined)}>
               <Text dimColor={l.isOff} color={l.isBad ? 'red' : undefined} wrap={isTerminal ? 'truncate-end' : undefined}>{l.text}</Text>
             </Button>}
       </Box>
@@ -244,7 +242,7 @@ export const register: Register = (on, options) => {
       return (
         <Box flexDirection="column">
           {menu}
-          <Text dimColor>사무실 평면도는 터미널에서만 그려집니다. 직원 줄을 누르면 인사카드가 채팅창에 나옵니다.</Text>
+          <Text dimColor>사무실 평면도는 터미널에서만 그려집니다. 직원 줄을 누르면 메뉴 화면에 인사카드가 나옵니다.</Text>
           {rowEls}
           {feedLines.length > 0 && <Text bold>사내 메신저</Text>}
           {feedLines.map(l => <Box key={l.key}><Text color={l.color} wrap="truncate-end">{l.text}</Text></Box>)}
@@ -263,6 +261,52 @@ export const register: Register = (on, options) => {
         {rowEls}
         {feedLines.length > 0 && <Box marginTop={1}><Text bold>사내 메신저</Text></Box>}
         {feedLines.map(l => <Box key={l.key}><Text color={l.color} wrap="truncate-end">{l.text}</Text></Box>)}
+      </Box>
+    )
+  })
+
+  // 사무실 메뉴 화면: 위에 1~5 메뉴, 아래에 고른 것을 표(마크다운)로. 설정은 켜고 끄는 버튼으로
+  on('ui.render', { component: 'Pane', requestId: MENU_PANE }, async ($, e) => {
+    // 사람이 바뀌면 다시 그리고(구독), 저장소(인사 기록)는 구독할 수 없어 사무실 패널처럼 5초마다 다시 그린다
+    await watchAgents($)
+    markPaneShown()
+    const view = await readMenuView($)
+    const b = await hrOf($)
+    const blocks = await viewBlocks($, b, view)
+    const { Box, Text, Button, Markdown } = $.ui.resolve(e)
+    const go = (v: string) => () => setMenuView($, v).catch(() => undefined)
+    const card = nickOfView(view)
+    return (
+      <Box flexDirection="column">
+        <Box columnGap={2} flexWrap="wrap">
+          {MENU.map(m => <Button key={m.key} hotkey={m.hotkey} plain dimColor={view !== m.view} onPress={go(m.view)}>{m.label}</Button>)}
+          <Button key="menu-close" hotkey="q" plain dimColor role="dismiss" onPress={() => $.ui.close({ id: MENU_PANE }).catch(() => undefined)}>닫기</Button>
+        </Box>
+        <Box marginTop={1} flexDirection="column">
+          <Markdown key="menu-body" text={mdOf(blocks)} />
+        </Box>
+        {view === 'settings' && (
+          <Box flexDirection="column">
+            {TOGGLES.map(t => (
+              <Box key={`${t.key}-line`} columnGap={2}>
+                <Button key={t.key} plain onPress={() => flip($, t.key).catch(() => undefined)}>{`${t.isOn(b) ? '[켜짐]' : '[꺼짐]'} ${t.label}`}</Button>
+                <Text dimColor>{t.note}</Text>
+              </Box>
+            ))}
+          </Box>
+        )}
+        {view === 'hr' && b.employees.length + b.retired.length > 0 && (
+          <Box marginTop={1} columnGap={2} flexWrap="wrap">
+            <Text dimColor>인사카드:</Text>
+            {b.employees.map(x => <Button key={`card-${x.nick}`} plain onPress={go(cardView(x.nick))}>{x.nick}</Button>)}
+            {b.retired.slice(0, 5).map(x => <Button key={`card-${x.nick}`} plain dimColor onPress={go(cardView(x.nick))}>{`${x.nick}(퇴사)`}</Button>)}
+          </Box>
+        )}
+        {card !== null && (
+          <Box marginTop={1}>
+            <Button key="card-back" hotkey="0" plain onPress={go('hr')}>← 인사 명부</Button>
+          </Box>
+        )}
       </Box>
     )
   })

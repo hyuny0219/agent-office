@@ -13,8 +13,8 @@ import { DEPT_INFO, DEPTS } from './hr'
 
 export const COMMAND = {
   name: 'office',
-  description: '에이전트 사무실 평면도 보기. budget [<부서> <달러>|<부서> off]: 부서별 하루 비용 한도, approval on|off: 보고·계획 결재 켜고 끄기, reorg on|off: 조직 개편(권고사직·계약 종료) 켜고 끄기, report [today|week]: 일간·주간 보고, hr: 인사 기록(부서·직급·연봉·평가), hr <별칭>: 인사카드, hr on|off: 업무 지시 인사 메모 켜고 끄기, hr ab on|off: 교육 효과 측정(비교군) 켜고 끄기',
-  argumentHint: '[budget [<부서> <달러>|<부서> off] | approval on|off | reorg on|off | report [today|week] | hr [<별칭>|on|off|ab on|off]]',
+  description: '에이전트 사무실 평면도 보기. menu: 메뉴 화면(인사 명부·보고서·예산·설정을 표로), budget [<부서> <달러>|<부서> off]: 부서별 하루 비용 한도, approval on|off: 보고·계획 결재 켜고 끄기, reorg on|off: 조직 개편(권고사직·계약 종료) 켜고 끄기, report [today|week]: 일간·주간 보고, hr: 인사 기록(부서·직급·연봉·평가), hr <별칭>: 인사카드, hr on|off: 업무 지시 인사 메모 켜고 끄기, hr ab on|off: 교육 효과 측정(비교군) 켜고 끄기',
+  argumentHint: '[menu | budget [<부서> <달러>|<부서> off] | approval on|off | reorg on|off | report [today|week] | hr [<별칭>|on|off|ab on|off]]',
 }
 
 /** 글로 답할 하위 명령이면 그 답, 패널을 열 명령이면 null */

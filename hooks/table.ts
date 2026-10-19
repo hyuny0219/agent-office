@@ -27,7 +27,7 @@ export function cellOf(s: string, max = Infinity): string {
     if (widthOf(out + ch) > max - 1) break
     out += ch
   }
-  return `${out}…`
+  return `${out.trimEnd()}…`
 }
 
 /**
@@ -41,4 +41,76 @@ export function tableLines(head: readonly string[], rows: readonly (readonly str
   const last = head.length - 1
   const line = (cells: readonly string[]) => cells.map((c, i) => (i === last && (align[i] ?? 'l') === 'l' ? c : pad(c, widths[i] ?? 0, align[i] ?? 'l'))).join('  ')
   return [line(head), widths.map(w => '─'.repeat(w)).join('  '), ...body.map(line)].map(l => l.trimEnd())
+}
+
+// ── 문서 블록: 같은 내용을 글(명령 답)과 마크다운(메뉴 화면) 두 가지로 그린다 ─────────────
+
+export type Block =
+  | { t: 'title'; text: string }
+  | { t: 'line'; text: string }
+  | { t: 'gap' }
+  | { t: 'section'; text: string }
+  | { t: 'bullet'; text: string }
+  | { t: 'field'; label: string; value: string }
+  | { t: 'table'; head: readonly string[]; rows: readonly (readonly string[])[]; align?: readonly ('l' | 'r')[]; max?: readonly (number | undefined)[] }
+
+/** 이름표 줄의 이름 폭 */
+const FIELD_WIDTH = 12
+
+/** 글로: 표는 칸 맞춤, 절 머리는 ■, 글머리는 -, 이름표는 폭을 맞춘다 */
+export function textOf(blocks: readonly Block[]): string {
+  return blocks.flatMap(b => {
+    switch (b.t) {
+      case 'title': case 'line': return [b.text]
+      case 'gap': return ['']
+      case 'section': return [`■ ${b.text}`]
+      case 'bullet': return [`- ${b.text}`]
+      case 'field': return [`${pad(b.label, FIELD_WIDTH)}${cellOf(b.value)}`]
+      case 'table': return tableLines(b.head, b.rows, b.align, b.max)
+    }
+  }).join('\n')
+}
+
+/** 마크다운 화면이 한 번에 그리는 글자 수(엔진 한도) */
+export const MD_MAX = 100_000
+
+/**
+ * 마크다운에 넣을 글: 터미널 제어 문자와 글 방향 뒤집기를 지우고(엔진은 tab·줄바꿈 말고는 받지 않는다), 공백을 한 칸으로 접고,
+ * 마크다운 문법 글자는 글자 그대로 보이게 이스케이프한다(업무 설명 "fix __init__"이 굵게 그려지지 않도록)
+ */
+export const mdText = (s: string, max?: number): string =>
+  cellOf(s.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '').replace(/[\x00-\x08\x0b-\x1f\x7f‪-‮⁦-⁩]/g, ' '), max)
+    .replace(/[\\`*_[\]<>|#~]/g, ch => `\\${ch}`)
+
+/** 마크다운으로: 제목 ##, 절 ###, 표는 마크다운 표(수는 오른쪽 정렬), 이름표는 줄바꿈으로 잇고, 나머지는 문단 */
+export function mdOf(blocks: readonly Block[]): string {
+  const parts: { t: Block['t']; md: string }[] = []
+  for (const b of blocks) {
+    switch (b.t) {
+      case 'title': parts.push({ t: b.t, md: `## ${mdText(b.text)}` }); break
+      // 줄이 목록 표시(- , + , 1. )로 시작하면 목록으로 그려지지 않게 앞을 이스케이프한다
+      case 'line': parts.push({ t: b.t, md: mdText(b.text).replace(/^([-+]|\d+\.)(?= )/, '\\$1') }); break
+      case 'gap': break
+      case 'section': parts.push({ t: b.t, md: `### ${mdText(b.text)}` }); break
+      case 'bullet': parts.push({ t: b.t, md: `- ${mdText(b.text)}` }); break
+      case 'field': parts.push({ t: b.t, md: `**${mdText(b.label)}** ${mdText(b.value)}` }); break
+      case 'table': {
+        const row = (cells: readonly string[]) => `| ${cells.join(' | ')} |`
+        parts.push({ t: b.t, md: [
+          row(b.head.map(h => mdText(h))),
+          row(b.head.map((_, i) => ((b.align?.[i] ?? 'l') === 'r' ? '---:' : '---'))),
+          ...b.rows.map(r => row(b.head.map((_, i) => mdText(r[i] ?? '', b.max?.[i])))),
+        ].join('\n') })
+      }
+    }
+  }
+  // 글머리끼리는 이어 목록으로, 이름표끼리는 줄바꿈(줄 끝 두 칸)으로 잇고, 나머지는 문단으로 띄운다
+  const md = parts.reduce((s, x, i) => {
+    if (i === 0) return x.md
+    const prev = parts[i - 1]?.t
+    if (prev === 'bullet' && x.t === 'bullet') return `${s}\n${x.md}`
+    if (prev === 'field' && x.t === 'field') return `${s}  \n${x.md}`
+    return `${s}\n\n${x.md}`
+  }, '')
+  return md.length <= MD_MAX ? md : `${md.slice(0, MD_MAX - 20)}\n\n…(잘림)`
 }

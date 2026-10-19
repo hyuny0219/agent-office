@@ -208,8 +208,8 @@ declare module 'claude-code' {
       agents: OfficeAgent[]
       /** 사내 메신저(최근 줄이 뒤) */
       feed: Utterance[]
-      /** 패널 메뉴의 설정 줄을 펼쳤는지 */
-      settingsOpen: boolean
+      /** 메뉴 화면에서 보고 있는 것: hr·today·week·budget·settings·card:<별칭> */
+      menuView: string
     }
   }
 }

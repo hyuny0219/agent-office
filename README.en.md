@@ -36,6 +36,7 @@ In the desktop app, where `/plugin` does not run: click + next to the prompt box
 | Command | What it does |
 | --- | --- |
 | `/office` | Open the office floor plan pane |
+| `/office menu` | Open the office menu pane: roster, daily/weekly reports, budget and settings as tables |
 | `/office hr` | HR records: staff, rank, salary, latest review, done/failed, tool errors, reworks and attendance alerts by department, plus each department's repeated mistakes |
 | `/office hr <nick>` | One employee's personnel card: rank and experience to the next rank, salary breakdown, record, token total, last 5 jobs, the department's repeated mistakes (`bear` or the Korean name both work, former employees too) |
 | `/office approval on` / `off` | Turn approvals on or off (on by default): team leads sign off finished jobs' reports, and the planning lead reviews confirmed plans |
@@ -47,7 +48,7 @@ In the desktop app, where `/plugin` does not run: click + next to the prompt box
 
 The floor plan is drawn in pixels in the terminal (72 to 140 columns wide, 27 rows tall). The desktop app and VS Code show the list only.
 
-Press a menu item above the pane (`1` roster · `2` daily report · `3` weekly report · `4` budget), or an employee's row (their personnel card), and the same text is left in the main chat as dim notice lines, one per line. Reports, the roster, personnel cards and budgets are laid out as aligned tables. Notices are for you; the model doesn't read them. Open `5` settings to turn approvals, reorganization, the HR memo and training-effect measurement on or off right in the pane. The hotkeys work while the pane has focus.
+The office pane's `menu` button (hotkey `m`) or `/office menu` opens a separate office menu pane. Pick `1` roster · `2` daily report · `3` weekly report · `4` budget · `5` settings at the top and it is shown as tables inside that pane (`q` closes it). Pressing an employee's row in the office pane shows their personnel card in the menu pane, and the nick buttons under the roster open cards too (`0` back to the roster). The settings view turns approvals, reorganization, the HR memo and training-effect measurement on or off in place. Hotkeys work while that pane has focus.
 
 ## The office
 
@@ -167,7 +168,7 @@ claude plugin test .
 claude --plugin-dir .
 ```
 
-`hooks/register.tsx` only wires engine events; the work is split up: `store.ts` (state and persistence), `flow.ts` (sync, reviews, approvals, attendance, reorganization), `view.ts` (pane rows, painting the floor plan), `commands.ts` (`/office` text answers), `menu.ts` (the pane menu: a press leaves a notice in the chat), `table.ts` (aligned text tables). Decisions live in pure modules: `hr.ts` (HR), `org.ts` (assignment, approval accuracy, reorganization), `approval.ts` (approvals), `speech.ts` (chatter), `report.ts` (reports, roster, personnel cards), `tokens.ts` (token usage and cost), `budget.ts` (department budgets), `trial.ts` (training effect), `watch.ts` (attendance), `scene.ts` (floor plan).
+`hooks/register.tsx` only wires engine events; the work is split up: `store.ts` (state and persistence), `flow.ts` (sync, reviews, approvals, attendance, reorganization), `view.ts` (pane rows, painting the floor plan), `commands.ts` (`/office` text answers), `menu.ts` (the menu pane's items and per-view content), `table.ts` (aligned tables and document blocks rendered as text or Markdown). Decisions live in pure modules: `hr.ts` (HR), `org.ts` (assignment, approval accuracy, reorganization), `approval.ts` (approvals), `speech.ts` (chatter), `report.ts` (reports, roster, personnel cards), `tokens.ts` (token usage and cost), `budget.ts` (department budgets), `trial.ts` (training effect), `watch.ts` (attendance), `scene.ts` (floor plan).
 
 The README screenshots (`docs/office.png`, `docs/office.gif`) are made by running `hooks/scene.ts` itself (needs Pillow):
 
