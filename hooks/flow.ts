@@ -14,6 +14,7 @@ import { callKeyOf, isCheckCommand, ERROR_STREAK, errorKeyOf, errorToast, isAlar
 import { shortType } from '../core/scene'
 import { addTokens, chargeReview, usageOf } from '../core/tokens'
 import { addNote, markRejected, noteOf } from '../core/notes'
+import { markSeen, proposalNotices, tellProposals } from '../core/playbook'
 import { BUDGET_CHOICES, budgetDenyText, budgetQuestion, choiceOf, gateOf, noticed, overrunsOf, overrunText, waive } from '../core/budget'
 import type { BudgetChoice, Overrun } from '../core/budget'
 import { admit, agentsOf, fresh, hold, hrOf, keptNow, MEET_MS, meet, nickOfId, patch, release, save, saveHr, speak } from './store'
@@ -52,6 +53,8 @@ async function appraise($: EngineInterface, a: OfficeAgent, isDone: boolean, isK
     if (!isPassed) release(a.nick)
   }
   if (!isPassed) await reorganize($)
+  // 알림이 실패해도 함께 끝난 다른 사람의 평가는 이어 간다
+  if (!isPassed) await checkProposals($).catch(() => undefined)
 }
 
 /** 평가 한 건. 결재에 올렸으면 true(그 결재가 끝나면 직원을 놓고 조직 개편을 본다) */
@@ -124,6 +127,8 @@ async function review1($: EngineInterface, a: OfficeAgent, isDone: boolean, isKi
       .then(() => reorganize($))
       // 결재에 쓴 비용도 그 부서 예산에 든다
       .then(() => checkBudget($))
+      // 반려로 새 지침 후보가 생겼을 수 있다
+      .then(() => checkProposals($))
       .catch(() => undefined)
       .finally(() => {
         approvals.delete(a.id)
@@ -251,6 +256,32 @@ export async function checkBudget($: EngineInterface) {
     $.ui.toast(`${overrunText(o)}. 한도를 바꾸려면 /office budget ${o.dept} <달러>`)
     await speak($, null, null, hrLineOf(overrunText(o), now))
   }
+}
+
+/** 새로 오른 부서 지침 후보를 한 번씩 알린다(평가·결재·대표 평가로 업무 기록이 바뀐 뒤). 바뀐 것이 없으면 저장하지 않는다 */
+export async function checkProposals($: EngineInterface) {
+  const now = await $.clock.now()
+  if (tellProposals(await hrOf($), now).book === (await hrOf($))) return
+  let fresh: ReturnType<typeof tellProposals>['fresh'] = []
+  await saveHr($, x => {
+    const r = tellProposals(x, now)
+    fresh = r.fresh
+    return r.book
+  })
+  for (const text of proposalNotices(fresh)) {
+    $.ui.toast(text)
+    await speak($, null, null, hrLineOf(text, now))
+  }
+  // 사무실 패널의 알림 줄을 다시 그린다(인사 기록은 구독할 수 없다)
+  $.ui.invalidate('ui.render')
+}
+
+/** 지침 화면을 봤다: 사무실 패널의 새 후보 알림 줄을 내린다 */
+export async function seePlaybook($: EngineInterface) {
+  const now = await $.clock.now()
+  if (markSeen(await hrOf($), now) === (await hrOf($))) return
+  await saveHr($, x => markSeen(x, now))
+  $.ui.invalidate('ui.render')
 }
 
 /** 예산 확인 창이 떠 있는 부서(나란히 맡겨도 부서마다 한 번만 묻고, 기다리던 일들은 같은 답을 따른다) */

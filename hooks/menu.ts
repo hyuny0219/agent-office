@@ -6,11 +6,12 @@ import type { BossRating, Dept, HrBook, JobRecord } from '../types'
 import { DEPT_INFO, DEPTS, deptFor, isTypeKey, MAX_DEPT_MAP, rate, setDept } from '../core/hr'
 import { rankChangeText } from '../core/answer'
 import { budgetBlocks } from '../core/budget'
-import { adopt, dropRule, playbookBlocks, proposalsOf, roomOf } from '../core/playbook'
+import { adopt, dropRule, playbookBlocks, proposalsOf, roomOf, settled } from '../core/playbook'
 import type { Proposal } from '../core/playbook'
 import { archiveBlocks, cardBlocks, deptMapBlocks, findEmployee, knownTypesOf, reportBlocks, rosterBlocks } from '../core/report'
 import type { Block } from '../core/table'
 import { agentsOf, saveHr } from './store'
+import { checkProposals } from './flow'
 import { APPROVER_MODEL } from '../core/approval'
 
 export const MENU_PANE = 'agent-office-menu'
@@ -64,6 +65,8 @@ export async function rateJob($: EngineInterface, nick: string, job: number, rat
   })
   const change = rankChangeText(moved)
   if (change !== '') $.ui.toast(`${nick}${change}`)
+  // 아쉬움이 쌓이면 새 지침 후보가 생길 수 있다
+  await checkProposals($).catch(() => undefined)
   $.ui.invalidate('ui.render')
 }
 
@@ -106,9 +109,10 @@ export async function pressPlaybook($: EngineInterface, key: string) {
       // 그때 화면에 있던 그 지침만(후보가 바뀌었으면 아무것도 하지 않는다)
       const btn = playbookButtons(b, now).find(x => x.key === key)
       if (btn === undefined) return b
-      if (btn.kind === 'drop') return dropRule(b, btn.dept, (b.playbooks?.[btn.dept]?.rules ?? []).findIndex(r => r.key === btn.ruleKey) + 1)
+      // 지침 화면에서 한 일이라 드러난 후보는 대표가 보고 있다(새 후보로 알리지 않는다)
+      if (btn.kind === 'drop') return settled(dropRule(b, btn.dept, (b.playbooks?.[btn.dept]?.rules ?? []).findIndex(r => r.key === btn.ruleKey) + 1), btn.dept, now)
       const p = proposalsOf(b, btn.dept, now).find(x => x.key === btn.ruleKey)
-      return p === undefined ? b : adopt(b, btn.dept, [p], now)
+      return p === undefined ? b : settled(adopt(b, btn.dept, [p], now), btn.dept, now)
     })
   } finally {
     $.ui.invalidate('ui.render')

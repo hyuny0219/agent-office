@@ -104,6 +104,9 @@ const shots: Record<string, string> = {
   'omp-side-48.txt': lines(sideLines(48, scene, null)),
   'omp-side-74-plan.txt': lines(sideLines(74, scene, planLines)),
   'omp-menu-settings-100.txt': lines(menuLines('settings', 100, scene, null)),
+  // 대표가 아직 보지 않은 새 지침 후보가 있을 때(채택한 지침을 빼 두면 그 흠이 다시 후보로 오른다): 맨 위 알림 줄
+  'omp-widget-140-alert.txt': lines(widgetLines(140, { ...scene, book: { ...scene.book, playbooks: undefined } }, null)),
+  'omp-side-48-alert.txt': lines(sideLines(48, { ...scene, book: { ...scene.book, playbooks: undefined } }, null)),
 }
 // 메뉴 화면(두 판이 같은 블록을 쓴다: Claude Code는 마크다운으로, omp는 이 글 표로)
 for (const m of MENU) if (m.view !== 'settings') shots[`menu-${m.key}-${m.view}.txt`] = lines(textOf(viewBlocks(m.view, scene)).split('\n'))

@@ -8,14 +8,14 @@ import { checkRunOf, errLineOf, messageOf, oopsOf, orderOf, replyOf, selfTalkOf 
 import { enroll, errorLessonKey, markHit } from '../core/trial'
 import { activityOf, layoutOf } from '../core/scene'
 import { answer, COMMAND } from './commands'
-import { awaitApproval, checkBudget, checkFollowUp, gateSpawn, checkRework, EDIT_TOOLS, fileOf, isCheckCommand, papers, reorganize, reviewPlan, syncStatus, takeNotes, watch } from './flow'
+import { awaitApproval, checkBudget, checkFollowUp, checkProposals, gateSpawn, seePlaybook, checkRework, EDIT_TOOLS, fileOf, isCheckCommand, papers, reorganize, reviewPlan, syncStatus, takeNotes, watch } from './flow'
 import { usageOf } from '../core/tokens'
-import { playbookLines } from '../core/playbook'
+import { playbookLines, proposalAlert } from '../core/playbook'
 import { briefNotes } from '../core/notes'
 import { cardView, deptButtons, deptNote, flip, MENU, MENU_PANE, MENU_TITLE, nickOfView, playbookButtons, pressDept, pressPlaybook, ratableOf, rateJob, TOGGLES, viewBlocks } from './menu'
 import { mdOf } from '../core/table'
 import { isShell } from '../core/watch'
-import { admit, agentsOf, chargeAgent, readMenuView, setMenuView, ensure, fresh, hold, hrOf, MEET_MS, meet, nickOfId, patch, readFeed, release, save, saveHr, speak, staff, watchAgents } from './store'
+import { admit, agentsOf, chargeAgent, readMenuView, setMenuView, ensure, fresh, hrOf, MEET_MS, meet, nickOfId, patch, readFeed, releaseStaffed, save, saveHr, speak, staff, watchAgents } from './store'
 import { cellsOf, dropOffice, feedRowsOf, FRAME_MS, markPaneShown, officeAt, RASTER, rowsOf, tick } from './view'
 
 const PANE = 'agent-office'
@@ -44,6 +44,8 @@ export const register: Register = (on, options) => {
       return { text: opened.isPlaced ? '사무실 메뉴를 열었습니다. 1 인사 명부 · 2 일간 보고 · 3 주간 보고 · 4 예산 · 5 설정 · 6 지침 · 7 기록' : '사무실 메뉴가 아직 그려지지 않았습니다(창이 좁으면 넓혀 주세요).' }
     }
     const text = await answer($, e.args)
+    // 대표 평가·결재 설정으로 지침 후보가 바뀌었을 수 있다
+    if (text !== null) await checkProposals($).catch(() => undefined)
     // 설정을 바꾼 명령이면 패널의 켜짐·꺼짐 표시를 다시 그린다(설정은 상태가 아니라 저장소에 있다)
     if (text !== null) $.ui.invalidate('ui.render')
     if (text !== null) return { text }
@@ -58,9 +60,8 @@ export const register: Register = (on, options) => {
     // 예산을 넘은 부서면 맡기기 전에 대표에게 묻는다(맡기지 않으면 아무도 뽑지 않는다)
     const denied = await gateSpawn($, e.subagentType, e.description)
     if (denied !== null) return { deny: denied }
+    // staff가 고른 직원을 붙잡아 둔다: 사무실에 들어올 때까지 조직 개편이 내보내거나 나란히 뜬 다른 일이 같은 직원을 고르지 않도록
     const { employee, why } = await staff($, e.subagentType, e.description)
-    // 사무실에 들어올 때까지 붙잡아 둔다(그 사이 조직 개편이 고른 직원을 내보내지 않도록)
-    hold(employee.nick)
     try {
       const at = await $.clock.now()
       let brief: string | null = null
@@ -95,7 +96,7 @@ export const register: Register = (on, options) => {
       await speak($, null, null, order.line)
       return spawned
     } finally {
-      release(employee.nick)
+      releaseStaffed(employee.nick)
     }
   })
 
@@ -231,11 +232,15 @@ export const register: Register = (on, options) => {
     // 메뉴 화면은 따로 연다. 직원 줄을 누르면 메뉴 화면에 그 직원의 인사카드를 띄운다
     const openMenu = async (view?: string) => {
       if (view !== undefined) await setMenuView($, view)
+      if (view === 'playbook') await seePlaybook($)
       await $.ui.open({ id: MENU_PANE, title: MENU_TITLE, focus: true, closeOnEscape: true })
     }
+    // 새 지침 후보가 있으면 메뉴 버튼 아래에 알림 줄(누르면 메뉴 6 지침으로)
+    const alert = proposalAlert(b, now, e.surface === 'terminal' && (e.viewport?.columns ?? 80) < 72)
     const menu = (
-      <Box>
+      <Box flexDirection="column">
         <Button key="open-menu" hotkey="m" plain onPress={() => openMenu().catch(() => undefined)}>메뉴(인사 명부·보고서·예산·설정)</Button>
+        {alert !== null && <Button key="playbook-alert" hotkey="p" plain onPress={() => openMenu('playbook').catch(() => undefined)}><Text color="yellow" wrap="truncate-end">{`● ${alert}`}</Text></Button>}
       </Box>
     )
     const isTerminal = e.surface === 'terminal'
@@ -283,11 +288,13 @@ export const register: Register = (on, options) => {
     await watchAgents($)
     markPaneShown()
     const view = await readMenuView($)
+    // 지침 화면을 보고 있으면(메뉴를 그 화면으로 다시 열었거나, 보는 중에 새 후보가 올라도) 본 것으로 적는다
+    if (view === 'playbook') await seePlaybook($).catch(() => undefined)
     const b = await hrOf($)
     const blocks = await viewBlocks($, b, view)
     const buttons = view === 'playbook' ? playbookButtons(b, await $.clock.now()) : []
     const { Box, Text, Button, Markdown } = $.ui.resolve(e)
-    const go = (v: string) => () => setMenuView($, v).catch(() => undefined)
+    const go = (v: string) => () => setMenuView($, v).then(() => (v === 'playbook' ? seePlaybook($) : undefined)).catch(() => undefined)
     const card = nickOfView(view)
     return (
       <Box flexDirection="column">

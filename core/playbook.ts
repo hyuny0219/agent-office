@@ -148,3 +148,81 @@ export function playbookBlocks(book: HrBook, now: number): Block[] {
   else out.push({ t: 'gap' }, { t: 'line', text: '빼기: /office playbook <부서> drop <지침 번호>' })
   return out
 }
+
+// ── 새 후보 알림: 새로 오른 후보는 한 번 알리고, 대표가 지침 화면을 볼 때까지 사무실 화면에 알림 줄을 둔다 ─────
+
+/** 부서마다 지금 후보. 지침이 꽉 찬 부서는 null(후보를 내지 않을 뿐 사라진 것이 아니니, 알린 목록·본 목록을 그대로 둔다) */
+const nowOf = (book: HrBook, now: number): [Dept, Proposal[] | null][] => DEPTS.map(d => [d, roomOf(book, d) > 0 ? proposalsOf(book, d, now) : null])
+
+/** 열쇠 목록이 같은지 */
+const sameKeys = (a: readonly string[] | undefined, b: readonly string[]): boolean => (a ?? []).length === b.length && b.every(k => (a ?? []).includes(k))
+
+/** 부서 → 열쇠 표를 고친다(빈 목록은 빼고, 다 비면 칸째 없앤다). 바뀐 것이 없으면 같은 기록 */
+function setKeys(book: HrBook, field: 'proposalsTold' | 'proposalsSeen', next: (d: Dept, was: string[] | undefined) => string[] | undefined): HrBook {
+  const out: Partial<Record<Dept, string[]>> = {}
+  let isChanged = false
+  for (const d of DEPTS) {
+    const was = book[field]?.[d]
+    const keys = next(d, was) ?? was
+    if (keys !== undefined && keys.length > 0) out[d] = keys
+    if (!sameKeys(was, keys ?? [])) isChanged = true
+  }
+  if (!isChanged) return book
+  const { [field]: _old, ...rest } = book
+  return Object.keys(out).length === 0 ? rest : { ...rest, [field]: out }
+}
+
+/**
+ * 아직 알리지 않은 새 후보를 고르고, 알린 것으로 적는다. 사라진 후보는 알린 목록과 본 목록에서 함께 빼(나중에 다시 오르면
+ * 다시 알리고 알림 줄도 다시 뜬다). 지침이 꽉 찬 부서는 건드리지 않는다. 바뀐 것이 없으면 같은 기록을 돌려준다(저장하지 않도록)
+ */
+export function tellProposals(book: HrBook, now: number): { book: HrBook; fresh: { dept: Dept; p: Proposal }[] } {
+  const current = new Map(nowOf(book, now))
+  const fresh: { dept: Dept; p: Proposal }[] = []
+  for (const [d, props] of current) for (const p of props ?? []) if (!(book.proposalsTold?.[d] ?? []).includes(p.key)) fresh.push({ dept: d, p })
+  const keysOf = (d: Dept) => current.get(d)?.map(p => p.key)
+  const told = setKeys(book, 'proposalsTold', keysOf)
+  const pruned = setKeys(told, 'proposalsSeen', (d, was) => {
+    const keys = keysOf(d)
+    return keys === undefined ? undefined : (was ?? []).filter(k => keys.includes(k))
+  })
+  return { book: pruned, fresh }
+}
+
+/** 지침 화면을 봤다: 지금 후보를 모두(only를 주면 그 부서만) 본 것(알린 것)으로 적는다. 바뀐 것이 없으면 같은 기록 */
+export function markSeen(book: HrBook, now: number, only?: Dept): HrBook {
+  const current = new Map(nowOf(book, now))
+  const keysOf = (d: Dept) => (only === undefined || d === only ? current.get(d)?.map(p => p.key) : undefined)
+  return setKeys(setKeys(book, 'proposalsTold', keysOf), 'proposalsSeen', keysOf)
+}
+
+/** 대표가 그 부서의 지침을 채택·뺐다: 그 결과로 그 부서에 드러난 후보는 대표가 이미 보고 있으니 조용히 알린 것·본 것으로 적는다(다른 부서는 그대로) */
+export const settled = (book: HrBook, dept: Dept, now: number): HrBook => markSeen(book, now, dept)
+
+/** 대표가 아직 지침 화면에서 보지 못한 후보(부서별 수) */
+export function unseenOf(book: HrBook, now: number): { dept: Dept; count: number }[] {
+  return nowOf(book, now).flatMap(([d, props]) => {
+    const n = (props ?? []).filter(p => !(book.proposalsSeen?.[d] ?? []).includes(p.key)).length
+    return n === 0 ? [] : [{ dept: d, count: n }]
+  })
+}
+
+/** 사무실 화면의 알림 줄(못 본 후보가 없으면 null). 좁은 화면에는 짧게 */
+export function proposalAlert(book: HrBook, now: number, isShort = false): string | null {
+  const unseen = unseenOf(book, now)
+  if (unseen.length === 0) return null
+  const total = unseen.reduce((s, u) => s + u.count, 0)
+  return isShort ? `새 지침 후보 ${total}건 — 메뉴 6` : `새 지침 후보 ${total}건(${unseen.map(u => `${DEPT_INFO[u.dept].ko} ${u.count}`).join(' · ')}) — 메뉴 6 지침에서 채택하거나 넘기세요`
+}
+
+/** 새 후보의 알림 글(토스트·메신저): 부서마다 한 줄로 묶는다(쌓여 있던 후보가 한꺼번에 올라도 알림이 쏟아지지 않도록) */
+export function proposalNotices(fresh: readonly { dept: Dept; p: Proposal }[]): string[] {
+  return DEPTS.flatMap(d => {
+    const mine = fresh.filter(f => f.dept === d).map(f => f.p)
+    const first = mine[0]
+    if (first === undefined) return []
+    return [mine.length === 1
+      ? `${DEPT_INFO[d].ko} 지침 후보: ${first.text} (근거: ${first.why}). 메뉴 6 지침에서 채택`
+      : `${DEPT_INFO[d].ko} 지침 후보 ${mine.length}건: ${first.text} 외 ${mine.length - 1}건. 메뉴 6 지침에서 채택`]
+  })
+}

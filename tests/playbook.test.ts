@@ -1,10 +1,10 @@
 // 테스트: 부서 지침.
 import { expect, test } from 'claude-code/testing'
 
-import type { JobRecord } from '../types'
+import type { HrBook, JobRecord } from '../types'
 import { briefOf, emptyBook, hire, migrate } from '../core/hr'
 import { textOf } from '../core/table'
-import { adopt, dropRule, effectLine, effectOf, playbookBlocks, playbookLines, proposalsOf, statsOf } from '../core/playbook'
+import { adopt, dropRule, effectLine, effectOf, markSeen, playbookBlocks, playbookLines, proposalAlert, proposalNotices, proposalsOf, settled, statsOf, tellProposals, unseenOf } from '../core/playbook'
 
 test('부서 지침: 반복되는 흠으로 후보를 내고, 채택하면 업무 지시에 붙으며, 적용 전후 성적을 견주고, 빼고 저장해도 남는다', () => {
   const rec = (job: number, over: Partial<JobRecord> = {}): JobRecord => ({ nick: 'BEAR', dept: 'dev', job, description: `일 ${job}`, startedAt: job * 10, endedAt: job * 10 + 5, outcome: 'done', score: 10, errors: 0, isCheckFailed: false, isReworked: false, alarms: 0, ...over })
@@ -69,4 +69,69 @@ test('부서 지침: 반복되는 흠으로 후보를 내고, 채택하면 업�
   // 빼면 없어진다
   expect(dropRule(later, 'dev', 1).playbooks?.dev).toBeUndefined()
   expect(dropRule(later, 'dev', 5)).toBe(later)
+})
+
+test('새 지침 후보 알림: 새 후보만 한 번 알리고, 지침 화면을 볼 때까지 알림 줄을 두며, 사라진 후보가 다시 오르면 다시 알린다', () => {
+  const failed = (n: number): JobRecord => ({ nick: 'BEAR', dept: 'dev', job: n, description: `일 ${n}`, startedAt: n, endedAt: n, outcome: 'done', score: 6, errors: 0, isCheckFailed: true, isReworked: false, alarms: 0 })
+  let b: HrBook = emptyBook()
+  for (let i = 1; i <= 5; i++) b = { ...b, log: [failed(i), ...b.log] }
+  const r1 = tellProposals(b, 100)
+  expect(r1.fresh.map(f => [f.dept, f.p.key])).toEqual([['dev', 'check']])
+  expect(r1.book.proposalsTold).toEqual({ dev: ['check'] })
+  // 두 번째는 알리지 않고 기록도 그대로(저장하지 않게 같은 기록)
+  const r2 = tellProposals(r1.book, 100)
+  expect(r2.fresh).toEqual([])
+  expect(r2.book).toBe(r1.book)
+  expect(proposalNotices(r1.fresh)).toEqual([expect.stringContaining('개발팀 지침 후보: 끝내기 전에 테스트·빌드를 돌리고')] as never)
+  // 한 부서에 여러 건이 한꺼번에 오르면 한 줄로 묶는다
+  expect(proposalNotices([...r1.fresh, { dept: 'dev', p: { key: 'x', text: '둘째', why: '' } }, { dept: 'dev', p: { key: 'y', text: '셋째', why: '' } }])).toEqual(['개발팀 지침 후보 3건: 끝내기 전에 테스트·빌드를 돌리고, 실패하면 고치거나 실패한 채라는 것을 보고 첫 줄에 적는다 외 2건. 메뉴 6 지침에서 채택'])
+  // 알림 줄은 본 뒤에 내린다
+  expect(unseenOf(r1.book, 100)).toEqual([{ dept: 'dev', count: 1 }])
+  expect(proposalAlert(r1.book, 100)).toBe('새 지침 후보 1건(개발팀 1) — 메뉴 6 지침에서 채택하거나 넘기세요')
+  const seen = markSeen(r1.book, 100)
+  expect(proposalAlert(seen, 100)).toBeNull()
+  expect(markSeen(seen, 100)).toBe(seen)
+  // 채택하면 후보에서 빠지고 알린 목록·본 목록에서도 빠진다
+  const adopted = adopt(seen, 'dev', proposalsOf(seen, 'dev', 100), 100)
+  const r3 = tellProposals(adopted, 100)
+  expect(r3.book.proposalsTold).toBeUndefined()
+  expect(markSeen(r3.book, 100).proposalsSeen).toBeUndefined()
+  // 저장했다 읽어도 남고, 이상한 값은 버린다
+  expect(migrate(JSON.parse(JSON.stringify(seen)))?.proposalsSeen).toEqual({ dev: ['check'] })
+  expect(migrate({ ...emptyBook(), proposalsTold: { dev: ['a', 3], nope: ['x'] }, proposalsSeen: 'x' })?.proposalsTold).toEqual({ dev: ['a'] })
+  expect(migrate({ ...emptyBook(), proposalsSeen: 'x' })?.proposalsSeen).toBeUndefined()
+  // 본 것은 알린 것이기도 하다(지침 화면에서 본 뒤 같은 후보를 다시 알리지 않는다)
+  expect(tellProposals(markSeen(b, 100), 100).fresh).toEqual([])
+  // 사라졌다 다시 오르면 알림 줄도 다시 뜬다(본 목록에서도 빠진다)
+  const good = (n: number): JobRecord => ({ ...failed(n), isCheckFailed: false, score: 13 })
+  let gone = seen
+  for (let i = 6; i <= 25; i++) gone = { ...gone, log: [good(i), ...gone.log] }
+  const r4 = tellProposals(gone, 100)
+  expect([r4.book.proposalsTold, r4.book.proposalsSeen]).toEqual([undefined, undefined])
+  let back = r4.book
+  for (let i = 26; i <= 45; i++) back = { ...back, log: [failed(i), ...back.log] }
+  const r5 = tellProposals(back, 100)
+  expect(r5.fresh.map(f => f.p.key)).toEqual(['check'])
+  expect(proposalAlert(r5.book, 100)).not.toBeNull()
+  // 지침 화면에서 채택·빼기로 드러난 후보는 새로 알리지 않는다
+  expect(tellProposals(settled(adopted, 'dev', 100), 100).fresh).toEqual([])
+  // 다른 부서의 아직 알리지 않은 후보는 묻지 않는다
+  const qa = (n: number): JobRecord => ({ ...failed(n), nick: 'HAWK', dept: 'qa' })
+  let both = adopted
+  for (let i = 50; i <= 54; i++) both = { ...both, log: [qa(i), ...both.log] }
+  expect(tellProposals(settled(both, 'dev', 100), 100).fresh.map(f => f.dept)).toEqual(['qa'])
+})
+
+test('새 지침 후보 알림: 지침이 꽉 찬 부서는 후보를 내지 않을 뿐이라 알린 목록·본 목록을 지우지 않는다(자리가 나도 다시 알리지 않는다)', () => {
+  const failed = (n: number): JobRecord => ({ nick: 'BEAR', dept: 'dev', job: n, description: `일 ${n}`, startedAt: n, endedAt: n, outcome: 'done', score: 6, errors: 0, isCheckFailed: true, isReworked: false, alarms: 0 })
+  let b: HrBook = emptyBook()
+  for (let i = 1; i <= 5; i++) b = { ...b, log: [failed(i), ...b.log] }
+  const told = markSeen(tellProposals(b, 100).book, 100)
+  // 지침 8개로 채운다(후보 'check'는 그대로 남아 있지만 자리가 없어 보이지 않는다)
+  const full = { ...told, playbooks: { dev: { rules: Array.from({ length: 8 }, (_, i) => ({ key: `r${i}`, text: `지침 ${i}`, why: '', at: 0 })), appliedAt: 0, before: null } } }
+  const r = tellProposals(full, 100)
+  expect(r.book).toBe(full)
+  expect(markSeen(full, 100)).toBe(full)
+  // 하나를 빼 자리가 나면 같은 후보가 보이지만 이미 알린 것이라 새로 알리지 않는다
+  expect(tellProposals(dropRule(full, 'dev', 1), 100).fresh).toEqual([])
 })

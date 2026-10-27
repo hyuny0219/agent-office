@@ -4,7 +4,7 @@ import type { HrBook, OfficeAgent, Utterance } from '../types'
 import { feedRowsOf, rowsOf } from '../core/rows'
 import { budgetBlocks } from '../core/budget'
 import { archiveBlocks, cardBlocks, deptMapBlocks, findEmployee, reportBlocks, rosterBlocks } from '../core/report'
-import { playbookBlocks } from '../core/playbook'
+import { playbookBlocks, proposalAlert } from '../core/playbook'
 import { mdOf, textOf, widthOf } from '../core/table'
 import type { Block } from '../core/table'
 
@@ -50,7 +50,9 @@ const tinted = (r: { text: string; isOff: boolean; isBad: boolean }): string => 
 
 /** 입력창 위 패널: (켜면) 평면도, 그 아래 2단(왼쪽 사무실 목록 | 오른쪽 사내 메신저, 좁으면 위아래로) */
 export function widgetLines(width: number, s: Scene, plan: PlanLines): string[] {
-  const lines: string[] = []
+  // 새 지침 후보가 있으면 맨 위에 알림 줄(메뉴 6을 볼 때까지)
+  const alert = proposalAlert(s.book, s.now, width < 72)
+  const lines: string[] = alert === null ? [] : [`\x1b[33m● ${alert}\x1b[0m`]
   if (plan !== null && width >= 72) lines.push(...plan(width))
   const isTwo = width >= TWO_COLUMN_MIN
   const leftW = isTwo ? Math.floor(width * 0.55) : width
@@ -69,6 +71,8 @@ export function sideLines(width: number, s: Scene, plan: PlanLines): string[] {
   const inner = Math.max(10, width - 2)
   const bar = `\x1b[2m│\x1b[0m `
   const lines: string[] = [`\x1b[2m╭${'─'.repeat(Math.max(0, width - 1))}\x1b[0m`, `${bar}\x1b[1m에이전트 사무실\x1b[0m \x1b[2m(/office side 닫기 · /office menu)\x1b[0m`]
+  const alert = proposalAlert(s.book, s.now, inner < 72)
+  if (alert !== null) lines.push(`${bar}\x1b[33m● ${alert}\x1b[0m`)
   if (plan !== null && inner >= 72) for (const l of plan(inner)) lines.push(`${bar}${l}`)
   const rows = rowsOf([...s.agents], s.book, s.now, inner)
   for (const r of rows.length === 0 ? [{ text: '아직 일하는 에이전트가 없습니다', isOff: true, isBad: false }] : rows) lines.push(`${bar}${tinted(r)}`)

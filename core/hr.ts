@@ -207,6 +207,17 @@ export function migrate(stored: unknown): HrBook | null {
     return kept.length === 0 ? {} : { deptMap: Object.fromEntries(kept) }
   }
   const waivers = perDept(v.budgetWaivers, () => true)
+  /** 부서 → 열쇠 목록(지침 후보 알림): 부서·글이 맞는 것만 */
+  const keysOf = (x: unknown): Partial<Record<Dept, string[]>> | undefined => {
+    if (typeof x !== 'object' || x === null) return undefined
+    const out: Partial<Record<Dept, string[]>> = {}
+    for (const [d, list] of Object.entries(x as Record<string, unknown>)) {
+      if (isDept(d) && Array.isArray(list)) out[d] = list.filter((k): k is string => typeof k === 'string' && k.length <= 200).slice(0, 20)
+    }
+    return Object.keys(out).length === 0 ? undefined : out
+  }
+  const told = keysOf(v.proposalsTold)
+  const seen = keysOf(v.proposalsSeen)
   const archive = archiveOf(v.archive, isDept)
   const log = (Array.isArray(v.log) ? v.log : []).filter((x): x is JobRecord =>
     typeof x?.nick === 'string' && isNum(x.job) && isNum(x.startedAt) && isNum(x.endedAt) && isNum(x.score)
@@ -224,7 +235,7 @@ export function migrate(stored: unknown): HrBook | null {
     })
     .slice(0, MAX_LOG)
   // 아래에서 다시 읽는 칸은 저장된 그대로 남기지 않는다(모양이 틀린 값이 살아남지 않도록)
-  const { playbooks: _p, deptMap: _m, budgetWaivers: _w, archive: _a, ...keep } = v
+  const { playbooks: _p, deptMap: _m, budgetWaivers: _w, archive: _a, proposalsTold: _t, proposalsSeen: _s, ...keep } = v
   return {
     ...keep, version: 2, employees, lessons, handoffs, trials, log, retired,
     isCoaching: v.isCoaching !== false, isTrialing: v.isTrialing !== false, isApproving: v.isApproving !== false, isApprovalNoticed: v.isApprovalNoticed === true, trialSeq: num(v.trialSeq, 0),
@@ -232,6 +243,7 @@ export function migrate(stored: unknown): HrBook | null {
     budgets: perDept(v.budgets, x => x > 0), budgetNotices: perDept(v.budgetNotices, () => true),
     ...(playbooksOf(v.playbooks)),
     ...(deptMapOf(v.deptMap)), ...(Object.keys(waivers).length === 0 ? {} : { budgetWaivers: waivers }), ...(archive === undefined ? {} : { archive }),
+    ...(told === undefined ? {} : { proposalsTold: told }), ...(seen === undefined ? {} : { proposalsSeen: seen }),
   }
 }
 

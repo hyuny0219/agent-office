@@ -10,7 +10,7 @@ import { CONTROL_EVERY } from './trial'
 import { budgetLines, deptNamed, dollarsOf, unwaive } from './budget'
 import { exportFiles } from './archive'
 import type { ExportKind } from './archive'
-import { adopt, dropRule, MAX_RULES, playbookBlocks, proposalsOf, roomOf } from './playbook'
+import { adopt, dropRule, markSeen, MAX_RULES, settled, playbookBlocks, proposalsOf, roomOf } from './playbook'
 import { textOf } from './table'
 import { usdText } from './tokens'
 import { BOSS_RATE_POINTS, DEPT_INFO, DEPTS, deptFor, deptOf, isTypeKey, MAX_DEPT_MAP, rate, setDept, typeKey } from './hr'
@@ -104,7 +104,12 @@ export async function answerWith(desk: Desk, args: string): Promise<string | nul
   }
   if (sub === 'playbook') {
     const b = await desk.book()
-    if (arg === undefined || arg === '') return textOf(playbookBlocks(b, await desk.now()))
+    if (arg === undefined || arg === '') {
+      const at = await desk.now()
+      // 후보를 보였으니 사무실 화면의 새 후보 알림 줄을 내린다(바뀐 것이 없으면 저장하지 않는다)
+      if (markSeen(b, at) !== b) await desk.save(x => markSeen(x, at))
+      return textOf(playbookBlocks(b, at))
+    }
     const dept = deptNamed(arg)
     if (dept === null) return `${arg}라는 부서가 없습니다. 부서: ${DEPTS.map(d => DEPT_INFO[d].ko).join(', ')}`
     const [, , action, which] = args.trim().split(/\s+/)
@@ -115,14 +120,16 @@ export async function answerWith(desk: Desk, args: string): Promise<string | nul
       if (picked.length === 0) return `채택할 후보가 없습니다. /office playbook으로 ${DEPT_INFO[dept].ko} 후보 번호를 보세요.`
       const room = roomOf(b, dept)
       if (room < picked.length) return `${DEPT_INFO[dept].ko} 지침은 ${MAX_RULES}개까지입니다(남은 자리 ${Math.max(0, room)}). 먼저 /office playbook ${DEPT_INFO[dept].ko} drop <번호>로 빼세요.`
-      await desk.save(x => adopt(x, dept, picked, at))
+      await desk.save(x => settled(adopt(x, dept, picked, at), dept, at))
       return `${DEPT_INFO[dept].ko} 지침에 ${picked.length}개를 더합니다. 지금부터 그 부서 업무 지시에 붙고, 적용 전 성적(최근 업무)과 비교합니다:\n${picked.map(p => `- ${p.text}`).join('\n')}`
     }
     if (action === 'drop') {
       const n = Number(which)
       const rule = b.playbooks?.[dept]?.rules[n - 1]
       if (rule === undefined) return `${DEPT_INFO[dept].ko}에 ${which ?? ''}번 지침이 없습니다.`
-      await desk.save(x => dropRule(x, dept, n))
+      const at = await desk.now()
+      // 뺀 지침이 다시 후보로 드러나도 대표가 방금 한 일이니 새 후보로 알리지 않는다
+      await desk.save(x => settled(dropRule(x, dept, n), dept, at))
       return `${DEPT_INFO[dept].ko} 지침에서 뺍니다: ${rule.text}`
     }
     return '쓰는 법: /office playbook [<부서> adopt <후보 번호|all> | <부서> drop <지침 번호>]'

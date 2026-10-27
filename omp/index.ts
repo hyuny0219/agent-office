@@ -22,6 +22,7 @@ import type { TokenUse } from '../types'
 import { BUDGET_CHOICES, budgetDenyText, budgetQuestion, choiceOf, noticed, overrunsOf, overrunText, waive } from '../core/budget'
 import type { BudgetChoice } from '../core/budget'
 import { textOf } from '../core/table'
+import { markSeen, proposalNotices, tellProposals } from '../core/playbook'
 import { ansiLines } from './ansi'
 import { agents, changed, feedOf, hr, HR_DIR, onChange, patch, saveHr, say, takeLoadWarning, trim } from './store'
 import { menuLines, MENU, sideLines, TOGGLES, viewBlocks, widgetLines } from './view'
@@ -176,6 +177,7 @@ function appraise(ctx: Ctx, a: OfficeAgent, isDone: boolean) {
     approvals.delete(a.id)
     papers.delete(a.id)
     checkBudget(ctx)
+    checkProposals(ctx)
     trim()
   })
   approvals.set(a.id, p)
@@ -191,6 +193,28 @@ function checkBudget(ctx: Ctx) {
     ctx.ui?.notify?.(`${overrunText(o)}. 한도를 바꾸려면 /office budget ${o.dept} <달러>`, 'warning')
     say(hrLineOf(overrunText(o), now()))
   }
+}
+
+/** 새로 오른 부서 지침 후보를 한 번씩 알린다(평가·결재·대표 평가로 업무 기록이 바뀐 뒤) */
+function checkProposals(ctx: Ctx) {
+  if (tellProposals(hr(), now()).book === hr()) return
+  let fresh: ReturnType<typeof tellProposals>['fresh'] = []
+  saveHr(x => {
+    const r = tellProposals(x, now())
+    fresh = r.fresh
+    return r.book
+  })
+  for (const text of proposalNotices(fresh)) {
+    ctx.ui?.notify?.(text, 'info')
+    say(hrLineOf(text, now()))
+  }
+  changed()
+}
+
+/** 지침 화면을 봤다: 새 후보 알림 줄을 내린다 */
+function seePlaybook() {
+  if (markSeen(hr(), now()) !== hr()) saveHr(x => markSeen(x, now()))
+  changed()
 }
 
 /** 오래 일이 없거나 계속 성과가 나쁜 직원을 내보낸다(조직 개편이 켜져 있을 때) */
@@ -345,6 +369,7 @@ async function openMenu(ctx: Ctx, first: string) {
   } catch {
     markdown = null
   }
+  if (first === 'playbook') seePlaybook()
   await ctx.ui.custom((tui: any, _theme: any, _kb: any, done: (r: undefined) => void) => {
     let view = first
     return {
@@ -353,8 +378,10 @@ async function openMenu(ctx: Ctx, first: string) {
       },
       handleInput(data: string) {
         const m = MENU.find(x => x.key === data)
-        if (m !== undefined) view = m.view
-        else if (view === 'settings' && TOGGLES.some(x => x.key === data)) saveHr(TOGGLES.find(x => x.key === data)!.flip)
+        if (m !== undefined) {
+          view = m.view
+          if (view === 'playbook') seePlaybook()
+        } else if (view === 'settings' && TOGGLES.some(x => x.key === data)) saveHr(TOGGLES.find(x => x.key === data)!.flip)
         else if (data === 'q' || data === '\x1b') return done(undefined)
         tui.requestRender?.()
       },
@@ -439,6 +466,8 @@ export default function agentOffice(pi: Pi) {
         ctx.ui?.notify?.(`모르는 명령입니다: /office ${a}. 쓰는 법: /office [menu | side | export [json|csv] | dept [<종류> <부서>] | report today|week | hr [<별칭>] | rate <별칭> good|bad|clear | budget | playbook | approval|reorg|hr on|off]`, 'warning')
         return
       }
+      // 대표 평가·결재 설정으로 후보가 바뀌었을 수 있다
+      checkProposals(ctx)
       changed()
       // 보고서·명부·인사카드는 메뉴 화면에 표로(사용법 안내나 켜고 끄기 답은 알림으로)
       const [sub, arg] = a.split(/\s+/).map(x => x.toLowerCase())

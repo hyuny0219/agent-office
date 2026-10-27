@@ -3,6 +3,7 @@ import { describe, expect, test } from 'bun:test'
 
 import type { OfficeAgent } from '../types'
 import { emptyBook, hire, record, setDept } from '../core/hr'
+import { markSeen } from '../core/playbook'
 import { widthOf } from '../core/table'
 import { clip, menuHead, menuLines, MENU, pad, plain, sideLines, TWO_COLUMN_MIN, viewBlocks, widgetLines } from './view'
 import type { Scene } from './view'
@@ -34,6 +35,18 @@ describe('입력창 위 패널', () => {
     const withPlan = widgetLines(100, scene(), w => [`PLAN ${w}`])
     expect(plain(withPlan[0] ?? '')).toBe('PLAN 100')
     expect(widgetLines(70, scene(), () => ['PLAN']).some(l => plain(l) === 'PLAN')).toBe(false)
+  })
+})
+
+describe('새 지침 후보 알림', () => {
+  test('못 본 후보가 있으면 패널·사이드바 맨 위에 알림 줄, 본 뒤에는 없다', () => {
+    const failed = (n: number) => ({ nick: 'BEAR', dept: 'dev' as const, job: n, description: `일 ${n}`, startedAt: n, endedAt: n, outcome: 'done' as const, score: 6, errors: 0, isCheckFailed: true, isReworked: false, alarms: 0 })
+    let book = hire(emptyBook(), 'BEAR', 'dev', 'builder', 0).book
+    for (let i = 1; i <= 5; i++) book = record(book, failed(i))
+    expect(plain(widgetLines(100, scene({ book }), null)[0] ?? '')).toBe('● 새 지침 후보 1건(개발팀 1) — 메뉴 6 지침에서 채택하거나 넘기세요')
+    expect(sideLines(60, scene({ book }), null).map(plain)[2]).toContain('● 새 지침 후보 1건')
+    const seen = markSeen(book, NOW)
+    expect(widgetLines(100, scene({ book: seen }), null).map(plain).some(l => l.includes('지침 후보'))).toBe(false)
   })
 })
 

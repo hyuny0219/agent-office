@@ -1,4 +1,4 @@
-// 훅 테스트(엔진을 흉내 낸 하네스에서): 부서 배치·내보내기 명령, 예산 초과 때 맡기기 전 확인, 메뉴 7(기록)과 설정의 배치 버튼.
+// 훅 테스트(엔진을 흉내 낸 하네스에서): 부서 배치·내보내기 명령, 예산 초과 때 맡기기 전 확인, 나란히 맡길 때 배정, 메뉴 7(기록)과 설정의 배치 버튼, 새 지침 후보 알림.
 import { expect, test } from 'claude-code/testing'
 
 import type { HrBook, JobRecord } from '../types'
@@ -11,8 +11,10 @@ const MENU_PROPS = { title: '사무실 메뉴', isFocused: true, bodyColumns: 12
 /** 저장소·시계·토스트를 흉내 낸다 */
 function desk(on: Parameters<Parameters<typeof test>[1]>[1], first?: HrBook) {
   const store = new Map<string, unknown>(first === undefined ? [] : [['hr', first]])
+  const writes = { n: 0 }
   on('store.get', (_$, e) => ({ value: store.get(e.key) }))
   on('store.set', (_$, e) => {
+    writes.n++
     store.set(e.key, e.value)
     return { value: undefined }
   })
@@ -23,7 +25,7 @@ function desk(on: Parameters<Parameters<typeof test>[1]>[1], first?: HrBook) {
     return { value: undefined }
   })
   on('ui.open', () => ({ value: { isPlaced: true } }))
-  return { book: () => migrate(store.get('hr')), toasts }
+  return { book: () => migrate(store.get('hr')), toasts, writes }
 }
 
 const text = (r: unknown) => (r as { text?: string }).text ?? ''
@@ -186,3 +188,69 @@ for (const surface of ['terminal', 'desktop'] as const) {
     expect((await ui.find({ key: 'dept-builder' }))?.text).toBe('builder: 조사팀 (바꿈)')
   })
 }
+
+test('배정: 아무도 없을 때 나란히 맡기면 별칭이 겹치지 않게 둘을 새로 뽑는다', async ($, on) => {
+  const d = desk(on)
+  let n = 0
+  on('agent.spawn', () => {
+    n++
+    return { model: 'm', agentId: `c${n}` }
+  })
+  on('agent.list', () => ({ value: [] }))
+  const spawn = (i: number) => $.agent.spawn({ tool_use_id: `t${i}`, prompt: '고쳐', description: `고치기 ${i}`, subagentType: 'builder', ...SPAWN })
+  // 아무도 없을 때 둘을 나란히: 둘 다 새로 뽑되 별칭이 다르다
+  await Promise.all([spawn(1), spawn(2)])
+  const nicks = d.book()?.employees.map(e => e.nick) ?? []
+  expect(nicks.length).toBe(2)
+  expect(new Set(nicks).size).toBe(2)
+  const list = JSON.stringify(await $.command.run({ command: 'office', args: 'hr', ...RUN }))
+  for (const k of nicks) expect(list).toContain(k)
+})
+
+test('배정: 쉬는 직원이 하나뿐이면 나란히 뜬 둘째 일은 그 직원을 함께 받지 않고 새로 뽑는다', async ($, on) => {
+  const first = { ...emptyBook(), employees: [{ nick: 'BEAR', dept: 'dev' as const, type: 'builder', xp: 30, jobs: 3, done: 3, failed: 0, toolErrors: 0, reworks: 0, alarms: 0, rejections: 0, avgScore: 13, lastScore: 13, hiredAt: 0, lastAt: 1000 }] }
+  const d = desk(on, first)
+  const prompts: string[] = []
+  let n = 0
+  on('agent.spawn', (_$, e) => {
+    n++
+    prompts.push(e.prompt)
+    return { model: 'm', agentId: `c${n}` }
+  })
+  on('agent.list', () => ({ value: [] }))
+  await Promise.all([1, 2].map(i => $.agent.spawn({ tool_use_id: `t${i}`, prompt: '고쳐', description: `고치기 ${i}`, subagentType: 'builder', ...SPAWN })))
+  const nicks = d.book()?.employees.map(e => e.nick) ?? []
+  expect(nicks.length).toBe(2)
+  expect(nicks[0]).toBe('BEAR')
+  // 업무 지시의 담당도 서로 다르다
+  const who = prompts.map(p => /담당: 개발팀 (\S+)/.exec(p)?.[1])
+  expect(new Set(who).size).toBe(2)
+})
+
+test('지침 후보 알림: 새 후보가 오르면 토스트·메신저로 한 번 알리고, 사무실 패널의 알림 줄을 누르면 메뉴 6 지침이 열리며 줄이 내려간다', async ($, on) => {
+  const failed = (n: number): JobRecord => ({ nick: 'BEAR', dept: 'dev', job: n, description: `일 ${n}`, startedAt: n, endedAt: 9000 + n, outcome: 'done', score: 6, errors: 0, isCheckFailed: true, isReworked: false, alarms: 0 })
+  let first: HrBook = emptyBook()
+  for (let i = 1; i <= 5; i++) first = record(first, failed(i))
+  const d = desk(on, first)
+  on('agent.list', () => ({ value: [] }))
+  // 업무 기록이 바뀐 명령 뒤에 새 후보를 본다
+  await $.command.run({ command: 'office', args: 'report', ...RUN })
+  expect(d.toasts.filter(t => t.includes('개발팀 지침 후보')).length).toBe(1)
+  const before = d.writes.n
+  await $.command.run({ command: 'office', args: 'report week', ...RUN })
+  expect(d.toasts.filter(t => t.includes('개발팀 지침 후보')).length).toBe(1)
+  // 바뀐 것이 없으면 인사 기록을 다시 쓰지 않는다
+  expect(d.writes.n).toBe(before)
+  await $.command.run({ command: 'office', args: '', ...RUN })
+  const PANE_PROPS = { title: '에이전트 사무실', isFocused: false, bodyColumns: 120, placement: 'dock', scroll: { offset: 0, bodyRows: 60 }, view: {} } as const
+  const pane = await $.ui.mount({ plugin: 'agent-office', surface: 'terminal', component: 'Pane', requestId: 'agent-office', props: PANE_PROPS, viewport: { columns: 120, rows: 60 } })
+  expect(JSON.stringify(await pane.find({ key: 'playbook-alert' }))).toContain('새 지침 후보 1건(개발팀 1)')
+  await pane.press({ key: 'playbook-alert' })
+  expect(d.book()?.proposalsSeen).toEqual({ dev: ['check'] })
+  expect(await pane.find({ key: 'playbook-alert' })).toBeUndefined()
+  // 채택했다가 빼도(지침 화면에서 한 일) 다시 드러난 후보를 새로 알리지 않는다
+  await $.command.run({ command: 'office', args: 'playbook 개발팀 adopt 1', ...RUN })
+  await $.command.run({ command: 'office', args: 'playbook 개발팀 drop 1', ...RUN })
+  expect(d.toasts.filter(t => t.includes('개발팀 지침 후보')).length).toBe(1)
+  expect(await pane.find({ key: 'playbook-alert' })).toBeUndefined()
+})

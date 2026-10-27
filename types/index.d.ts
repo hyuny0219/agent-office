@@ -233,6 +233,10 @@ export type HrBook = {
   deptMap?: Record<string, Dept>
   /** 끝낸 일 기록에서 밀려난 오래된 일의 월별 요약(최근 달이 앞) */
   archive?: MonthSummary[]
+  /** 부서별로 이미 알린 지침 후보의 열쇠(새 후보만 토스트·메신저로 한 번 알린다) */
+  proposalsTold?: Partial<Record<Dept, string[]>>
+  /** 부서별로 대표가 지침 화면에서 본 후보의 열쇠(못 본 후보가 있으면 사무실 화면에 알림 줄) */
+  proposalsSeen?: Partial<Record<Dept, string[]>>
 }
 
 /** 한 달 동안 끝낸 일의 요약: 건수·결과·점수 합·비용(일한 것+결재)·재작업·반려·대표 평가, 부서별 건수·점수 합·비용 */
