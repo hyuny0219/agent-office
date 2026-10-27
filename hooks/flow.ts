@@ -10,7 +10,7 @@ import type { Facts } from '../core/approval'
 import { approvalLineOf, hrLineOf, replyOf, reportLineOf } from '../core/speech'
 import { followUp, isRejectTrusted, reinstate, reorgOf } from '../core/org'
 import { settle } from '../core/trial'
-import { callKeyOf, isCheckCommand, ERROR_STREAK, errorKeyOf, errorToast, isAlarm, isOvertime, isPolling, nudgeOf, REPEAT_STREAK, repeatToast, stepOf } from '../core/watch'
+import { attend, isCheckCommand, errorToast, isOvertime, nudgeOf, repeatToast } from '../core/watch'
 import { shortType } from '../core/scene'
 import { addTokens, chargeReview, usageOf } from '../core/tokens'
 import { addNote, markRejected, noteOf } from '../core/notes'
@@ -424,26 +424,14 @@ async function checkOvertime($: EngineInterface, working: ReadonlySet<string>) {
 export async function watch($: EngineInterface, id: string, e: { tool: string } & object, ran: { deny?: string; text?: string; isError?: boolean }): Promise<string | null> {
   // 거절은 그 직원의 실수가 아니다(같은 거절 문구가 되풀이돼도 세지 않는다)
   if (ran.deny !== undefined) return null
-  const errKey = ran.isError === true ? errorKeyOf(e.tool, ran.text ?? '', e) : null
-  const isPoll = isPolling(e.tool)
   const got: { kind?: 'error' | 'repeat' | null; s?: Streak; nick?: string } = {}
   // 지금 상태에서 바로 센다: 같은 직원의 도구가 나란히 돌아도 서로의 횟수를 잃지 않도록
   await save($, patch(id, a => {
-    // 도구마다 따로 센다. 사이에 다른 도구가 끼거나 실패해도 이어 세고(Edit 실패 → Read → Edit 실패가 흔한 헛손질), 그 도구가 성공하면 끊는다
-    const errStreaks = { ...(a.errStreaks ?? {}) }
-    if (errKey !== null) errStreaks[e.tool] = stepOf(errStreaks[e.tool], errKey)
-    else delete errStreaks[e.tool]
-    const callStreak = isPoll ? a.callStreak : stepOf(a.callStreak, callKeyOf(e))
-    const err = errKey === null ? undefined : errStreaks[e.tool]
-    const call = isPoll ? undefined : callStreak
-    // 오류 알림은 그 오류가 난 호출에서만. 같은 호출이 같은 오류로 되풀이되면 오류 알림 하나로 친다(제자리걸음은 성공한 호출만)
-    const kind = err !== undefined && isAlarm(err, ERROR_STREAK) ? 'error'
-      : errKey === null && call !== undefined && isAlarm(call, REPEAT_STREAK) ? 'repeat' : null
-    got.kind = kind
-    got.s = kind === 'error' ? err : call
+    const r = attend(a, e, ran.isError === true, ran.text ?? '')
+    got.kind = r.kind
+    got.s = r.streak
     got.nick = a.nick
-    // 이번 일의 근태 알림도 같은 저장에서 센다(곧 끝나 평가돼도 기록에서 빠지지 않도록)
-    return { ...a, errStreaks, callStreak, alarms: (a.alarms ?? 0) + (kind === null ? 0 : 1) }
+    return r.agent
   }))
   const kind = got.kind ?? null
   if (kind === null || got.nick === undefined || got.s === undefined) return null

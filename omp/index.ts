@@ -9,20 +9,21 @@ import { completeSimple } from '@oh-my-pi/pi-ai'
 
 import type { Dept, Employee, OfficeAgent } from '../types'
 import { answerWith } from '../core/answer'
-import { decide, deptFor, DEPTS, handOff, hire, leadOf, learn, lessonsFor, record, review, rework, salaryOf, assign, briefOf } from '../core/hr'
+import { decide, deptFor, DEPTS, handOff, hire, leadOf, learn, lessonKey, lessonsFor, record, review, rework, salaryOf, assign, briefOf, warn } from '../core/hr'
 import { decisionOf, decisionToast, REJECT_PENALTY, rejectNoteOf, requestOf, routeOf } from '../core/approval'
 import type { Facts } from '../core/approval'
 import { followUp, isRejectTrusted, pickFor, reorgOf } from '../core/org'
 import { addNote, briefNotes, markRejected, noteOf } from '../core/notes'
 import { checkRunOf, errLineOf, oopsOf, orderOf, reportLineOf, selfTalkOf, hrLineOf, approvalLineOf } from '../core/speech'
-import { isCheckCommand } from '../core/watch'
-import { activityOf, layoutOf, nickFor, Office } from '../core/scene'
+import { attend, errorToast, isCheckCommand, isOvertime, nudgeOf, repeatToast } from '../core/watch'
+import { enroll, errorLessonKey, markHit, settle } from '../core/trial'
+import { activityOf, layoutOf, nickFor, Office, shortType } from '../core/scene'
 import { addTokens, chargeReview, priceOf, usdOf } from '../core/tokens'
 import type { TokenUse } from '../types'
 import { BUDGET_CHOICES, budgetDenyText, budgetQuestion, choiceOf, noticed, overrunsOf, overrunText, waive } from '../core/budget'
 import type { BudgetChoice } from '../core/budget'
 import { textOf } from '../core/table'
-import { markSeen, proposalNotices, tellProposals } from '../core/playbook'
+import { markSeen, playbookLines, proposalNotices, tellProposals } from '../core/playbook'
 import { ansiLines } from './ansi'
 import { agents, changed, feedOf, hr, HR_DIR, onChange, patch, saveHr, say, takeLoadWarning, trim } from './store'
 import { menuLines, MENU, sideLines, TOGGLES, viewBlocks, widgetLines } from './view'
@@ -146,6 +147,12 @@ function appraise(ctx: Ctx, a: OfficeAgent, isDone: boolean) {
   const ended = now()
   patch(a.id, x => ({ ...x, endedAt: ended, activity: isDone ? 'done' : 'failed', tool: null }))
   const got = agents.get(a.id) ?? a
+  // 교육 효과 측정: 이번 업무가 든 쪽과 재발한 실수를 쌓고, 실험 기록을 지운다(두 번 세지 않도록)
+  if (got.trial !== undefined) {
+    const t = got.trial
+    saveHr(x => settle(x, t, ended))
+    patch(a.id, x => ({ ...x, trial: undefined }))
+  }
   let xpBefore = 0
   let job = 0
   let score = 0
@@ -192,6 +199,16 @@ function checkBudget(ctx: Ctx) {
   for (const o of over) {
     ctx.ui?.notify?.(`${overrunText(o)}. 한도를 바꾸려면 /office budget ${o.dept} <달러>`, 'warning')
     say(hrLineOf(overrunText(o), now()))
+  }
+}
+
+/** 야근: 오래 일하는 서브에이전트를 한 번씩 알린다(도구를 부르지 않고 오래 기다리는 동안에도 보도록 타이머가 부른다) */
+function checkOvertime(ctx: Ctx) {
+  const t = now()
+  for (const a of agents.values()) {
+    if (a.id === 'main' || a.isOvertimeNoticed === true || !isOvertime(a.startedAt, a.endedAt, t)) continue
+    patch(a.id, x => ({ ...x, isOvertimeNoticed: true }))
+    ctx.ui?.notify?.(`${a.nick}가 ${Math.floor((t - a.startedAt) / 60_000)}분째 야근 중입니다: ${a.description || shortType(a.type)}`, 'warning')
   }
 }
 
@@ -490,6 +507,8 @@ export default function agentOffice(pi: Pi) {
     ticker = setInterval(() => {
       frame++
       if (isPlanShown) changed()
+      // 야근은 5초마다 본다
+      if (frame % 25 === 0) checkOvertime(ctx)
     }, FRAME_MS)
     ticker.unref?.()
   })
@@ -504,9 +523,22 @@ export default function agentOffice(pi: Pi) {
     papers.set(ctx.agent.id, { task: String(e.prompt ?? '').slice(0, 4000), report: '' })
     say(orderOf('BOSS', employee.nick, description, '', now(), why).line)
     changed()
+    if (!hr().isCoaching) return
+    // 교육 효과 측정: 붙일 실수가 있으면 순번으로 메모군·비교군에 넣는다(비교군은 실수 목록만 빼고, 나머지 메모는 같게)
+    const at = now()
+    const lessons = lessonsFor(hr(), employee.dept, at)
+    const keys = lessons.map(lessonKey)
+    let arm: 'memo' | 'control' | undefined
+    saveHr(x => {
+      const en = enroll(x, keys)
+      arm = en?.arm
+      return en?.book ?? x
+    })
+    const isControl = arm === 'control'
+    if (arm !== undefined) patch(ctx.agent.id, x => ({ ...x, trial: { arm: arm as 'memo' | 'control', keys, hits: [] } }))
     const b = hr()
-    if (!b.isCoaching) return
-    const memo = briefOf(b, employee, now(), lessonsFor(b, employee.dept, now()), why, briefNotes(b, employee, description))
+    // 개인 업무 노트·부서 지침도 비교군에는 실수에서 온 것을 뺀다(실수 목록의 효과만 재도록)
+    const memo = briefOf(b, employee, at, isControl ? [] : lessons, why, briefNotes(b, employee, description, isControl), playbookLines(b, employee.dept, isControl))
     return memo === null ? undefined : { systemPrompt: [...(e.systemPrompt ?? []), memo] }
   })
 
@@ -521,7 +553,7 @@ export default function agentOffice(pi: Pi) {
     // 끝난 사람(평가를 마친 서브에이전트)의 늦은 도구는 세지 않는다
     if (a === undefined || (id !== 'main' && a.endedAt !== null)) return
     const name = toolName(String(e.toolName ?? ''))
-    const talk = selfTalkOf(a.nick, { tool: name, ...(e.input ?? {}) }, now())
+    const talk = selfTalkOf(a.nick, { ...(e.input ?? {}), tool: name }, now())
     patch(id, x => ({ ...x, activity: activityOf(name), tool: name, tools: x.tools + 1, say: talk.bubble }))
     if (talk.line !== null) say(talk.line)
   })
@@ -570,11 +602,26 @@ export default function agentOffice(pi: Pi) {
     }
     if (isError) {
       const o = oopsOf(a.nick, name, text, now())
-      patch(id, x => ({ ...x, say: o.bubble }))
+      // 실험 중인 실수가 다시 났으면 재발로 적는다
+      const hitKey = errorLessonKey(name, text)
+      patch(id, x => ({ ...x, say: o.bubble, ...(x.trial === undefined ? {} : { trial: markHit(x.trial, hitKey) }) }))
       say(o.line)
       if (a.dept !== undefined) saveHr(x => learn(x, a.dept as Dept, name, text, now()))
     }
-    return withLate
+    // 근태(서브에이전트만): 같은 오류 연발·같은 호출 되풀이면 알리고, 코칭이 켜져 있으면 그 직원의 도구 결과 뒤에 알림을 붙인다
+    // omp의 wait는 상태를 묻는 도구라 되풀이가 정상이다(제자리걸음으로 세지 않는다)
+    if (id === 'main' || tool === 'wait') return withLate
+    let att: ReturnType<typeof attend> | null = null
+    patch(id, x => {
+      att = attend(x, { ...input, tool: name }, isError, text)
+      return att.agent
+    })
+    const r = att as ReturnType<typeof attend> | null
+    if (r === null || r.kind === null || r.streak === undefined) return withLate
+    ctx.ui?.notify?.(r.kind === 'error' ? errorToast(a.nick, name, r.streak) : repeatToast(a.nick, name, r.streak), 'warning')
+    saveHr(x => warn(x, a.nick))
+    if (!hr().isCoaching) return withLate
+    return { content: [...(e.content ?? []), { type: 'text', text: `\n\n${nudgeOf(r.kind, name, r.streak)}` }] }
   })
 
   pi.on('message_end', async (e: any, ctx: Ctx) => {

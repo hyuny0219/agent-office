@@ -1,7 +1,7 @@
 // 근태. 일하는 모습에서 이상 징후를 찾는다: 같은 오류를 연달아 내거나(헛손질), 같은 도구를 같은 입력으로
 // 되풀이하거나(제자리걸음), 오래 붙잡고 있는(야근) 직원. 찾으면 사용자에게 토스트로 알리고, 코칭이 켜져 있으면
 // 그 직원이 도구 결과 뒤에 읽는 짧은 알림을 붙인다. 순수 함수만 둔다.
-import type { Streak } from '../types'
+import type { OfficeAgent, Streak } from '../types'
 import { patternOf, tipOf } from './hr'
 
 /** 같은 오류가 이만큼 연달아 나면 알린다(그 뒤로는 이 배수마다) */
@@ -100,3 +100,26 @@ export function nudgeOf(kind: 'error' | 'repeat', tool: string, s: Streak): stri
 /** 야근 중인가(일하는 중이고 오래됐다) */
 export const isOvertime = (startedAt: number, endedAt: number | null, now: number): boolean =>
   endedAt === null && now - startedAt >= OVERTIME_MS
+
+/** 근태 판정 한 번의 결과: 고친 사람(연속 횟수·근태 알림 수), 알릴 것(헛손질·제자리걸음, 없으면 null)과 그 연속 */
+export type Attendance = { agent: OfficeAgent; kind: 'error' | 'repeat' | null; streak: Streak | undefined }
+
+/**
+ * 도구 한 번을 근태에 반영한다(거절은 그 직원의 실수가 아니니 부르는 쪽이 넘긴다). e는 도구 이름과 입력(호출 열쇠를 만든다).
+ * 오류는 도구마다 따로 센다: 사이에 다른 도구가 끼거나 실패해도 이어 세고(Edit 실패 → Read → Edit 실패가 흔한 헛손질), 그 도구가 성공하면 끊는다.
+ * 오류 알림은 그 오류가 난 호출에서만, 같은 호출이 같은 오류로 되풀이되면 오류 알림 하나로 친다(제자리걸음은 성공한 호출만)
+ */
+export function attend(a: OfficeAgent, e: { tool: string } & object, isError: boolean, text: string): Attendance {
+  const errKey = isError ? errorKeyOf(e.tool, text, e) : null
+  const isPoll = isPolling(e.tool)
+  const errStreaks = { ...(a.errStreaks ?? {}) }
+  if (errKey !== null) errStreaks[e.tool] = stepOf(errStreaks[e.tool], errKey)
+  else delete errStreaks[e.tool]
+  const callStreak = isPoll ? a.callStreak : stepOf(a.callStreak, callKeyOf(e))
+  const err = errKey === null ? undefined : errStreaks[e.tool]
+  const call = isPoll ? undefined : callStreak
+  const kind = err !== undefined && isAlarm(err, ERROR_STREAK) ? 'error'
+    : errKey === null && call !== undefined && isAlarm(call, REPEAT_STREAK) ? 'repeat' : null
+  // 이번 일의 근태 알림도 같이 센다(곧 끝나 평가돼도 기록에서 빠지지 않도록)
+  return { agent: { ...a, errStreaks, callStreak, alarms: (a.alarms ?? 0) + (kind === null ? 0 : 1) }, kind, streak: kind === 'error' ? err : call }
+}
