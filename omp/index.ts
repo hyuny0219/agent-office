@@ -237,7 +237,7 @@ function sideComponent(beforeRender: () => void) {
       const list = [...agents.values()]
       const inner = Math.max(10, width - 2)
       const bar = `\x1b[2m│\x1b[0m `
-      const lines: string[] = [`${bar}\x1b[1m에이전트 사무실\x1b[0m \x1b[2m(/office side 닫기 · /office menu)\x1b[0m`]
+      const lines: string[] = [`\x1b[2m╭${'─'.repeat(Math.max(0, width - 1))}\x1b[0m`, `${bar}\x1b[1m에이전트 사무실\x1b[0m \x1b[2m(/office side 닫기 · /office menu)\x1b[0m`]
       if (isPlanShown && inner >= 72) {
         const layout = layoutOf(inner)
         if (sideOffice === null || sideOffice.layout.columns !== layout.columns) sideOffice = new Office(layout)
@@ -247,7 +247,9 @@ function sideComponent(beforeRender: () => void) {
       const rows = rowsOf(list, b, t, inner)
       for (const r of rows.length === 0 ? [{ text: '아직 일하는 에이전트가 없습니다', isOff: true, isBad: false }] : rows) lines.push(`${bar}${r.isOff ? `\x1b[2m${r.text}\x1b[0m` : r.isBad ? `\x1b[31m${r.text}\x1b[0m` : r.text}`)
       const feed = feedRowsOf(feedOf(), t)
-      if (feed.length > 0) lines.push(`${bar}\x1b[1m사내 메신저\x1b[0m`, ...feed.map(f => `${bar}\x1b[2m${f.text}\x1b[0m`))
+      lines.push(bar, `${bar}\x1b[1m사내 메신저\x1b[0m`, ...(feed.length === 0 ? [`${bar}\x1b[2m아직 오간 말이 없습니다\x1b[0m`] : feed.map(f => `${bar}\x1b[2m${f.text}\x1b[0m`)))
+      // 내용 높이만큼의 테두리 상자(화면 높이를 채우면 omp가 위에서부터 그리는 입력창·상태 줄을 가린다)
+      lines.push(`\x1b[2m╰${'─'.repeat(Math.max(0, width - 1))}\x1b[0m`)
       return lines.map(l => clip(l, width))
     },
     invalidate() {},
