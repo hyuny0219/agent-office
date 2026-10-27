@@ -18,6 +18,8 @@ export const DEPT_INFO: Record<Dept, { ko: string; en: string; color: number }> 
 const DEPT_OF: Record<string, Dept> = {
   builder: 'dev', executor: 'dev', 'general-purpose': 'dev', debugger: 'dev', 'code-simplifier': 'dev',
   'test-engineer': 'dev', designer: 'dev', fork: 'dev',
+  // oh-my-pi 기본 에이전트(sonic은 단순 작업이라 지원팀)
+  task: 'dev', scout: 'research', seance: 'research', sonic: 'ops',
   explore: 'research', 'document-specialist': 'research', scientist: 'research', tracer: 'research',
   'claude-code-guide': 'research', research: 'research',
   reviewer: 'qa', 'code-reviewer': 'qa', verifier: 'qa', critic: 'qa', 'security-reviewer': 'qa', 'qa-tester': 'qa',

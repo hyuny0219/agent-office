@@ -13,6 +13,10 @@ The main conversation (BOSS) talks with FOX from Planning in the meeting room. O
 
 > The mod's own text (the pane list, `/office hr`, toasts and the task-brief memo) is in Korean. The floor plan's signs, desk name plates and name tags are in English.
 
+## oh-my-pi version
+
+An oh-my-pi (omp) extension built on the same decision code (`core/`) lives in `omp/`. It ships separately from the Claude Code plugin and keeps its own HR records (`~/.omp/agent-office/hr.json`). `node scripts/pack-omp.mts --pack` builds `dist/omp-agent-office-<version>.tgz` for an internal registry (no Claude Code files inside). See [omp/README.md](omp/README.md) (Korean) for install and usage.
+
 ## Install
 
 At the prompt of a terminal session:

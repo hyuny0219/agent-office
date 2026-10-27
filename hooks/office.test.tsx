@@ -11,7 +11,7 @@ import { CONTROL_EVERY, effectText, enroll, markHit, MIN_CONTROL, MIN_MEMO, sett
 import { callKeyOf, errorKeyOf, isAlarm, isOvertime, isPolling, nudgeOf, OVERTIME_MS, stepOf } from '../core/watch'
 import { fitParts, rowsOf, widthOf } from './view'
 import { mdOf, tableLines, textOf } from '../core/table'
-import { rankChangeText } from './commands'
+import { rankChangeText } from '../core/answer'
 import { addNote, briefLine, briefNotes, markRejected, noteOf, summaryOf } from '../core/notes'
 import { isCheckCommand } from './flow'
 import { activityOf, encodeCells, koNick, layoutOf, nickFor, Office, PLAN_ROWS } from '../core/scene'

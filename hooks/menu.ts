@@ -4,7 +4,7 @@ import type { EngineInterface } from 'claude-code'
 
 import type { BossRating, HrBook, JobRecord } from '../types'
 import { rate } from '../core/hr'
-import { rankChangeText } from './commands'
+import { rankChangeText } from '../core/answer'
 import { budgetBlocks } from '../core/budget'
 import { cardBlocks, findEmployee, reportBlocks, rosterBlocks } from '../core/report'
 import type { Block } from '../core/table'
