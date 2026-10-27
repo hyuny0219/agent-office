@@ -213,10 +213,99 @@ let isPlanShown = false
 let office: Office | null = null
 let frame = 0
 
-function officeComponent(tui: any) {
+/** 위젯이 받은 화면(사이드바를 띄울 때 쓴다) */
+let lastTui: any = null
+
+// ── 사이드바(켜야 보임): 오른쪽에 겹쳐 띄우는 사무실. 일반 터미널에서 겹친 화면이 떠 있으면 omp는 전역 단축키(Ctrl+O 등)를 쉬게 하므로
+// 기본은 입력창 위 2단 패널이다. 사이드바는 키를 받지 않아(handleInput 없음), omp가 정한 곳(입력창·승인 창)으로 키가 그대로 간다 ─────────────
+
+/** 사이드바를 보이는 최소 터미널 폭 */
+const SIDE_MIN_COLUMNS = 120
+let side: { hide: () => void } | null = null
+/** 사이드바를 띄워 둘지(기본 꺼짐, AGENT_OFFICE_SIDE=1이면 켜고 시작). /office side로 바꾼다 */
+let isSideWanted = process.env.AGENT_OFFICE_SIDE === '1'
+/** 사이드바가 그리는 평면도(입력창 위 패널과 폭이 달라 따로 둔다) */
+let sideOffice: Office | null = null
+
+function sideComponent(beforeRender: () => void) {
+  const off = onChange(() => lastTui?.requestRender?.())
+  return {
+    render(width: number): string[] {
+      beforeRender()
+      const b = hr()
+      const t = now()
+      const list = [...agents.values()]
+      const inner = Math.max(10, width - 2)
+      const bar = `\x1b[2m│\x1b[0m `
+      const lines: string[] = [`${bar}\x1b[1m에이전트 사무실\x1b[0m \x1b[2m(/office side 닫기 · /office menu)\x1b[0m`]
+      if (isPlanShown && inner >= 72) {
+        const layout = layoutOf(inner)
+        if (sideOffice === null || sideOffice.layout.columns !== layout.columns) sideOffice = new Office(layout)
+        const leads = Object.fromEntries(DEPTS.map(d => [d, leadOf(b, d)?.nick]).filter(([, n]) => n !== undefined))
+        for (const l of ansiLines(sideOffice.draw(list, frame, t, leads), layout.columns, layout.rows)) lines.push(`${bar}${l}`)
+      }
+      const rows = rowsOf(list, b, t, inner)
+      for (const r of rows.length === 0 ? [{ text: '아직 일하는 에이전트가 없습니다', isOff: true, isBad: false }] : rows) lines.push(`${bar}${r.isOff ? `\x1b[2m${r.text}\x1b[0m` : r.isBad ? `\x1b[31m${r.text}\x1b[0m` : r.text}`)
+      const feed = feedRowsOf(feedOf(), t)
+      if (feed.length > 0) lines.push(`${bar}\x1b[1m사내 메신저\x1b[0m`, ...feed.map(f => `${bar}\x1b[2m${f.text}\x1b[0m`))
+      return lines.map(l => clip(l, width))
+    },
+    invalidate() {},
+    dispose() {
+      off()
+    },
+  }
+}
+
+/** 사이드바를 띄운다(이미 떠 있으면 그대로). 띄울 수 없으면 false */
+function openSide(): boolean {
+  if (side !== null) return true
+  const tui = lastTui
+  if (tui === null || typeof tui.showOverlay !== 'function') return false
+  // 키는 omp가 정한 곳(입력창·승인 창)으로 가지만, 겹친 화면에 포커스가 가면 입력창이 커서를 그리지 않는다:
+  // 띄우기 전의 입력창이 계속 커서를 그리게 한다(한글 조합 위치도 그 커서를 따른다)
+  const editor = tui.getFocused?.() ?? null
+  const comp = sideComponent(() => {
+    if (editor !== null && typeof editor === 'object' && 'focused' in editor && tui.getFocused?.() === comp) editor.focused = true
+  })
+  const handle = tui.showOverlay(comp, { anchor: 'top-right', width: '34%', minWidth: 44, maxHeight: '100%', visible: (w: number) => w >= SIDE_MIN_COLUMNS })
+  if (editor !== null && typeof editor === 'object' && 'focused' in editor) editor.focused = true
+  side = {
+    hide: () => {
+      handle.hide()
+      comp.dispose()
+    },
+  }
+  tui.requestRender?.()
+  return true
+}
+
+/** 사이드바를 켜고 끈다. 켜졌으면 true, 띄울 수 없는 화면이면 null */
+function toggleSide(): boolean | null {
+  if (side !== null) {
+    side.hide()
+    side = null
+    isSideWanted = false
+    lastTui?.requestRender?.()
+    return false
+  }
+  isSideWanted = true
+  return openSide() ? true : null
+}
+
+/** 사이드바가 지금 보이는지(넓은 창에서 떠 있을 때): 그동안 입력창 위 목록은 숨긴다 */
+const isSideShown = (width: number): boolean => side !== null && (lastTui?.terminal?.columns ?? width) >= SIDE_MIN_COLUMNS
+
+export function officeComponent(tui: any) {
+  lastTui = tui
+  // 기본으로 사이드바를 띄운다(위젯이 화면에 붙은 뒤에)
+  if (isSideWanted && side === null) setTimeout(() => {
+    if (isSideWanted) openSide()
+  }, 0)
   const off = onChange(() => tui.requestRender?.())
   return {
     render(width: number): string[] {
+      if (isSideShown(width)) return []
       const b = hr()
       const t = now()
       const list = [...agents.values()]
@@ -227,9 +316,21 @@ function officeComponent(tui: any) {
         const leads = Object.fromEntries(DEPTS.map(d => [d, leadOf(b, d)?.nick]).filter(([, n]) => n !== undefined))
         lines.push(...ansiLines(office.draw(list, frame, t, leads), layout.columns, layout.rows))
       }
-      const rows = rowsOf(list, b, t, width)
-      lines.push(...(rows.length === 0 ? ['\x1b[2m에이전트 사무실: 아직 일하는 에이전트가 없습니다 (/office menu)\x1b[0m'] : rows.map(r => (r.isOff ? `\x1b[2m${r.text}\x1b[0m` : r.isBad ? `\x1b[31m${r.text}\x1b[0m` : r.text))))
-      if (isPlanShown) for (const f of feedRowsOf(feedOf(), t)) lines.push(`\x1b[2m${f.text}\x1b[0m`)
+      // 2단: 왼쪽 사무실 목록 | 오른쪽 사내 메신저(좁으면 위아래로)
+      const isTwo = width >= TWO_COLUMN_MIN
+      const leftW = isTwo ? Math.floor(width * 0.55) : width
+      const rightW = isTwo ? width - leftW - 3 : width
+      const rows = rowsOf(list, b, t, leftW)
+      const left = rows.length === 0 ? ['\x1b[2m에이전트 사무실: 아직 일하는 에이전트가 없습니다 (/office menu)\x1b[0m'] : rows.map(r => (r.isOff ? `\x1b[2m${r.text}\x1b[0m` : r.isBad ? `\x1b[31m${r.text}\x1b[0m` : r.text))
+      const feed = feedRowsOf(feedOf(), t).slice(isTwo ? -Math.max(left.length, 3) : -2)
+      const right = feed.length === 0 ? ['\x1b[2m사내 메신저: 아직 오간 말이 없습니다\x1b[0m'] : feed.map(f => `\x1b[2m${f.text}\x1b[0m`)
+      if (!isTwo) {
+        lines.push(...left.map(l => clip(l, width)), ...right.map(l => clip(l, width)))
+        return lines.map(l => clip(l, width))
+      }
+      for (let i = 0; i < Math.max(left.length, right.length); i++) {
+        lines.push(`${pad(left[i] ?? '', leftW)} \x1b[2m│\x1b[0m ${clip(right[i] ?? '', rightW)}`)
+      }
       return lines.map(l => clip(l, width))
     },
     invalidate() {},
@@ -237,6 +338,16 @@ function officeComponent(tui: any) {
       off()
     },
   }
+}
+
+/** 2단 패널을 쓰는 최소 폭 */
+const TWO_COLUMN_MIN = 90
+
+/** 보이는 칸 수에 맞춰 자르고 모자라면 빈칸으로 채운다 */
+function pad(line: string, width: number): string {
+  const cut = clip(line, width)
+  const seen = widthOf(cut.replace(/\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, ''))
+  return `${cut}${' '.repeat(Math.max(0, width - seen))}`
 }
 
 /** 보이는 칸 수로 자른다(ANSI 코드는 칸을 차지하지 않는다) */
@@ -333,7 +444,7 @@ async function openMenu(ctx: Ctx, first: string) {
 
 export default function agentOffice(pi: Pi) {
   pi.registerCommand('office', {
-    description: '에이전트 사무실: 인자 없이 평면도 켜고 끄기, menu(메뉴 화면), playbook [<부서> adopt <n|all>|<부서> drop <n>](부서 지침), report [today|week], hr [<별칭>], rate <별칭> good|bad|clear, budget, approval·reorg·hr on|off',
+    description: '에이전트 사무실: 인자 없이 평면도 켜고 끄기, side(오른쪽 사이드바 켜고 끄기), menu(메뉴 화면), playbook [<부서> adopt <n|all>|<부서> drop <n>](부서 지침), report [today|week], hr [<별칭>], rate <별칭> good|bad|clear, budget, approval·reorg·hr on|off',
     handler: async (args: string, ctx: Ctx) => {
       const a = (args ?? '').trim()
       if (a === '') {
@@ -343,6 +454,11 @@ export default function agentOffice(pi: Pi) {
         return
       }
       if (a.toLowerCase() === 'menu') return openMenu(ctx, 'hr')
+      if (a.toLowerCase() === 'side') {
+        const on = toggleSide()
+        ctx.ui?.notify?.(on === null ? '사이드바를 띄울 수 없는 화면입니다(대화형 터미널에서만).' : on ? `사이드바를 켭니다(터미널 폭 ${SIDE_MIN_COLUMNS}칸 이상일 때 보임). 끄려면 /office side` : '사이드바를 끕니다.', 'info')
+        return
+      }
       const text = await answerWith({ book: async () => hr(), save: async fn => void saveHr(fn), agents: async () => [...agents.values()], now: async () => now() }, a)
       if (text === null) {
         ctx.ui?.notify?.(`모르는 명령입니다: /office ${a}. 쓰는 법: /office [menu | report today|week | hr [<별칭>] | rate <별칭> good|bad|clear | budget | approval|reorg|hr on|off]`, 'warning')
