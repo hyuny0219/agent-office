@@ -3,6 +3,7 @@
 // 다음에 그 부서 직원이 일을 맡을 때 업무 지시 끝에 짧은 인사 메모로 붙인다. 순수 함수만 둔다.
 import type { BossRating, DeptStats, Playbook, WorkNote, Approval, Dept, Employee, Handoff, HrBook, JobRecord, Lesson, Retiree } from '../types'
 import { tokensOf } from './tokens'
+import { archiveOf, foldInto } from './archive'
 
 export const DEPTS: Dept[] = ['dev', 'research', 'qa', 'plan', 'docs', 'ops']
 
@@ -27,8 +28,41 @@ const DEPT_OF: Record<string, Dept> = {
   writer: 'docs',
 }
 
-/** 'oh-my-claudecode:executor' → 'dev' */
-export const deptOf = (type: string): Dept => DEPT_OF[(type.split(':').pop() ?? type).toLowerCase()] ?? 'ops'
+/** 배치 표의 열쇠: 'oh-my-claudecode:executor' → 'executor' */
+export const typeKey = (type: string): string => (type.split(':').pop() ?? type).trim().toLowerCase()
+
+/** 기본 배치: 'oh-my-claudecode:executor' → 'dev' */
+export const deptOf = (type: string): Dept => {
+  const k = typeKey(type)
+  // 표에 제 칸으로 있는 것만(constructor·toString 같은 상속 이름은 표에 없는 종류다)
+  return Object.hasOwn(DEPT_OF, k) ? DEPT_OF[k] as Dept : 'ops'
+}
+
+/** 배치를 바꿀 수 있는 종류 이름(글자·숫자·._@- 만, 접두어 뺀 뒤 60자까지) */
+export const isTypeKey = (key: string): boolean => /^[\w.@-]{1,60}$/.test(key) && !RESERVED_KEYS.has(key)
+/** 객체의 상속 이름: 배치 표 열쇠로 쓰면 표를 읽을 때 엉뚱한 값이 나온다 */
+const RESERVED_KEYS = new Set(['__proto__', 'constructor', 'prototype', 'hasownproperty', 'tostring', 'valueof', '__definegetter__', '__definesetter__', '__lookupgetter__', '__lookupsetter__', 'isprototypeof', 'propertyisenumerable', 'tolocalestring'])
+
+/** 대표가 바꾼 배치를 먼저 보고, 없으면 기본 배치 */
+export const deptFor = (book: HrBook, type: string): Dept => {
+  const k = typeKey(type)
+  const m = book.deptMap
+  return m !== undefined && Object.hasOwn(m, k) ? m[k] as Dept : deptOf(type)
+}
+
+/** 바꾼 배치는 50가지 종류까지 */
+export const MAX_DEPT_MAP = 50
+
+/** 그 종류의 배치를 바꾼다(null이면 기본 배치로 되돌린다). 기본과 같으면 따로 적지 않는다 */
+export function setDept(book: HrBook, type: string, dept: Dept | null): HrBook {
+  const key = typeKey(type)
+  if (!isTypeKey(key)) return book
+  const { [key]: _was, ...rest } = book.deptMap ?? {}
+  const next = dept === null || dept === deptOf(key) ? rest : { ...rest, [key]: dept }
+  if (Object.keys(next).length > MAX_DEPT_MAP) return book
+  const { deptMap: _old, ...others } = book
+  return Object.keys(next).length === 0 ? others : { ...others, deptMap: next }
+}
 
 export const RANKS = [
   { ko: '사원', xp: 0, salary: 3600 },
@@ -166,6 +200,14 @@ export function migrate(stored: unknown): HrBook | null {
     const o = typeof x === 'object' && x !== null ? x as Record<string, unknown> : {}
     return Object.fromEntries(DEPTS.flatMap(d => (isNum(o[d]) && isOk(o[d]) ? [[d, o[d]]] : [])))
   }
+  /** 바꾼 배치: 종류 이름·부서가 맞는 것만 */
+  const deptMapOf = (x: unknown): { deptMap?: Record<string, Dept> } => {
+    if (typeof x !== 'object' || x === null) return {}
+    const kept = Object.entries(x as Record<string, unknown>).filter((kv): kv is [string, Dept] => isTypeKey(kv[0]) && isDept(kv[1])).slice(0, MAX_DEPT_MAP)
+    return kept.length === 0 ? {} : { deptMap: Object.fromEntries(kept) }
+  }
+  const waivers = perDept(v.budgetWaivers, () => true)
+  const archive = archiveOf(v.archive, isDept)
   const log = (Array.isArray(v.log) ? v.log : []).filter((x): x is JobRecord =>
     typeof x?.nick === 'string' && isNum(x.job) && isNum(x.startedAt) && isNum(x.endedAt) && isNum(x.score)
     && (x.outcome === 'done' || x.outcome === 'failed' || x.outcome === 'killed'))
@@ -181,12 +223,15 @@ export function migrate(stored: unknown): HrBook | null {
         ...(bossRating === 'good' || bossRating === 'bad' ? { bossRating, ...(isNum(x.bossXp) ? { bossXp: x.bossXp } : {}) } : {}) }
     })
     .slice(0, MAX_LOG)
+  // 아래에서 다시 읽는 칸은 저장된 그대로 남기지 않는다(모양이 틀린 값이 살아남지 않도록)
+  const { playbooks: _p, deptMap: _m, budgetWaivers: _w, archive: _a, ...keep } = v
   return {
-    ...v, version: 2, employees, lessons, handoffs, trials, log, retired,
+    ...keep, version: 2, employees, lessons, handoffs, trials, log, retired,
     isCoaching: v.isCoaching !== false, isTrialing: v.isTrialing !== false, isApproving: v.isApproving !== false, isApprovalNoticed: v.isApprovalNoticed === true, trialSeq: num(v.trialSeq, 0),
     isReorganizing: v.isReorganizing !== false, isReorgNoticed: v.isReorgNoticed === true,
     budgets: perDept(v.budgets, x => x > 0), budgetNotices: perDept(v.budgetNotices, () => true),
     ...(playbooksOf(v.playbooks)),
+    ...(deptMapOf(v.deptMap)), ...(Object.keys(waivers).length === 0 ? {} : { budgetWaivers: waivers }), ...(archive === undefined ? {} : { archive }),
   }
 }
 
@@ -229,8 +274,12 @@ export const MAX_PLAYBOOK_RULES = 8
 /** 떠난 직원은 최근 50명까지 */
 export const MAX_RETIRED = 50
 
-/** 끝낸 일 한 건을 기록한다(보고서·인사카드가 읽는다) */
-export const record = (book: HrBook, r: JobRecord): HrBook => ({ ...book, log: [r, ...book.log].slice(0, MAX_LOG) })
+/** 끝낸 일 한 건을 기록한다(보고서·인사카드가 읽는다). 넘쳐 밀려나는 오래된 일은 버리지 않고 월별 요약으로 접는다 */
+export function record(book: HrBook, r: JobRecord): HrBook {
+  const all = [r, ...book.log]
+  const old = all.slice(MAX_LOG)
+  return { ...book, log: all.slice(0, MAX_LOG), ...(old.length === 0 ? {} : { archive: foldInto(book.archive ?? [], old) }) }
+}
 
 // ── 재작업: 끝낸 일의 파일을 BOSS가 곧 다시 고치면 그 직원의 평가를 깎는다 ─────
 

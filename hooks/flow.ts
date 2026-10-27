@@ -3,8 +3,8 @@
 // 여기서는 그 결과를 상태·인사 기록·토스트·메신저로 옮긴다.
 import type { EngineInterface } from 'claude-code'
 
-import type { OfficeActivity, OfficeAgent, Streak, TrialTicket } from '../types'
-import { CHECK_PENALTY, decide, DEPT_INFO, DEPTS, deptOf, gradeOf, handOff, hire, lessonsFor, warn, rankOf, record, review, rework, REWORK_PENALTY, salaryOf } from '../core/hr'
+import type { Dept, OfficeActivity, OfficeAgent, Streak, TrialTicket } from '../types'
+import { CHECK_PENALTY, decide, DEPT_INFO, DEPTS, deptFor, gradeOf, handOff, hire, lessonsFor, warn, rankOf, record, review, rework, REWORK_PENALTY, salaryOf } from '../core/hr'
 import { APPROVAL_TIMEOUT_MS, APPROVER_MODEL, decisionOf, decisionToast, planNoteOf, planRequestOf, planReviewerOf, planReviewOf, REJECT_PENALTY, rejectNoteOf, requestOf, routeOf } from '../core/approval'
 import type { Facts } from '../core/approval'
 import { approvalLineOf, hrLineOf, replyOf, reportLineOf } from '../core/speech'
@@ -14,8 +14,8 @@ import { callKeyOf, isCheckCommand, ERROR_STREAK, errorKeyOf, errorToast, isAlar
 import { shortType } from '../core/scene'
 import { addTokens, chargeReview, usageOf } from '../core/tokens'
 import { addNote, markRejected, noteOf } from '../core/notes'
-import { noticed, overrunsOf, overrunText } from '../core/budget'
-import type { Overrun } from '../core/budget'
+import { BUDGET_CHOICES, budgetDenyText, budgetQuestion, choiceOf, gateOf, noticed, overrunsOf, overrunText, waive } from '../core/budget'
+import type { BudgetChoice, Overrun } from '../core/budget'
 import { admit, agentsOf, fresh, hold, hrOf, keptNow, MEET_MS, meet, nickOfId, patch, release, save, saveHr, speak } from './store'
 
 /** 파일을 고치는 도구(재작업 판정에 쓴다) */
@@ -76,7 +76,7 @@ async function review1($: EngineInterface, a: OfficeAgent, isDone: boolean, isKi
   // 명부에 없으면 채용한다. 떠난 직원이면 새로 뽑지 않고 복직시킨다(같은 별칭이 두 사람이 되지 않도록)
   await saveHr($, x => x.employees.some(e => e.nick === a.nick) ? x
     : x.retired.some(e => e.nick === a.nick) ? reinstate(x, a.nick)
-    : hire(x, a.nick, a.dept ?? deptOf(a.type), a.type, a.startedAt).book)
+    : hire(x, a.nick, a.dept ?? deptFor(x, a.type), a.type, a.startedAt).book)
   const now = await $.clock.now()
   let result: ReturnType<typeof review> | null = null
   let xpBefore = 0
@@ -90,7 +90,7 @@ async function review1($: EngineInterface, a: OfficeAgent, isDone: boolean, isKi
     const employee = result.book.employees.find(x => x.nick === a.nick)
     const job = employee?.jobs ?? 0
     const logged = record(result.book, {
-      nick: a.nick, dept: a.dept ?? deptOf(a.type), job, description: got.description, startedAt: got.startedAt, endedAt: got.endedAt ?? now,
+      nick: a.nick, dept: a.dept ?? deptFor(x, a.type), job, description: got.description, startedAt: got.startedAt, endedAt: got.endedAt ?? now,
       outcome: isDone ? 'done' : isKilled ? 'killed' : 'failed', score: result.score, errors: got.errors ?? 0,
       isCheckFailed: isDone && got.isCheckFailed === true, isReworked: false, alarms: got.alarms ?? 0, files: (got.files ?? []).length,
       ...(employee === undefined ? {} : { salary: salaryOf(result.book, employee) }), ...(got.tokens === undefined ? {} : { tokens: got.tokens }),
@@ -251,6 +251,34 @@ export async function checkBudget($: EngineInterface) {
     $.ui.toast(`${overrunText(o)}. 한도를 바꾸려면 /office budget ${o.dept} <달러>`)
     await speak($, null, null, hrLineOf(overrunText(o), now))
   }
+}
+
+/** 예산 확인 창이 떠 있는 부서(나란히 맡겨도 부서마다 한 번만 묻고, 기다리던 일들은 같은 답을 따른다) */
+const asking = new Map<Dept, Promise<BudgetChoice>>()
+
+/**
+ * 예산 조치: 한도를 넘은 부서에 새 일을 맡기기 전에 대표에게 묻는다(계속 / 이번만 / 맡기지 않기).
+ * 맡기지 않으면 띄운 쪽이 받을 글을, 맡기면 null을 돌려준다. 물을 수 없으면(창을 닫았거나 -p) 맡기지 않는다
+ */
+export async function gateSpawn($: EngineInterface, type: string, description: string): Promise<string | null> {
+  const b = await hrOf($)
+  if (Object.keys(b.budgets).length === 0) return null
+  const dept = deptFor(b, type)
+  const now = await $.clock.now()
+  const o = gateOf(b, await agentsOf($), dept, now)
+  if (o === null) return null
+  let pending = asking.get(dept)
+  if (pending === undefined) {
+    const ask = $.ui.ask(budgetQuestion(o, description), { header: '예산 초과', options: [BUDGET_CHOICES.go, BUDGET_CHOICES.once, BUDGET_CHOICES.stop] })
+    pending = ask.then(choiceOf, (): BudgetChoice => 'stop').finally(() => asking.delete(dept))
+    asking.set(dept, pending)
+  }
+  const choice = await pending
+  if (choice === 'go') await saveHr($, x => waive(x, dept, now))
+  if (choice !== 'stop') return null
+  $.ui.toast(`${DEPT_INFO[dept].ko}에 새 일을 맡기지 않았습니다(예산 초과). 한도를 바꾸려면 /office budget ${dept} <달러>`)
+  await speak($, null, null, hrLineOf(`${DEPT_INFO[dept].ko} 새 일 보류 — ${overrunText(o)}`, now))
+  return budgetDenyText(o)
 }
 
 /** 누군가(별칭 by) 파일을 고쳤다: 방금 끝낸 다른 사람의 일이면 그 기록에 후속 수정을 적는다(결재 정확도). 재작업 감점보다 먼저 본다 */

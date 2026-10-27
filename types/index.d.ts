@@ -227,6 +227,28 @@ export type HrBook = {
   budgetNotices: Partial<Record<Dept, number>>
   /** 부서 지침(대표가 승인한 개선안): 그 부서 업무 지시에 붙는다 */
   playbooks?: Partial<Record<Dept, Playbook>>
+  /** 부서별로 예산 초과를 "계속"으로 넘긴 때(24시간 동안 새 일을 맡길 때 다시 묻지 않는다) */
+  budgetWaivers?: Partial<Record<Dept, number>>
+  /** 에이전트 종류(소문자, 접두어 뺀 이름) → 부서: 대표가 바꾼 배치(/office dept). 없는 종류는 기본 배치 */
+  deptMap?: Record<string, Dept>
+  /** 끝낸 일 기록에서 밀려난 오래된 일의 월별 요약(최근 달이 앞) */
+  archive?: MonthSummary[]
+}
+
+/** 한 달 동안 끝낸 일의 요약: 건수·결과·점수 합·비용(일한 것+결재)·재작업·반려·대표 평가, 부서별 건수·점수 합·비용 */
+export type MonthSummary = {
+  /** 'YYYY-MM'(끝낸 때의 현지 시각) */
+  month: string
+  jobs: number
+  done: number
+  failed: number
+  scoreSum: number
+  usd: number
+  reworks: number
+  rejected: number
+  good: number
+  bad: number
+  depts: Partial<Record<Dept, { jobs: number; scoreSum: number; usd: number }>>
 }
 
 /** 부서 지침: 채택한 지침, 마지막으로 적용한 때, 그때의 부서 성적(전후 비교용) */
@@ -242,7 +264,7 @@ declare module 'claude-code' {
       agents: OfficeAgent[]
       /** 사내 메신저(최근 줄이 뒤) */
       feed: Utterance[]
-      /** 메뉴 화면에서 보고 있는 것: hr·today·week·budget·settings·card:<별칭> */
+      /** 메뉴 화면에서 보고 있는 것: hr·today·week·budget·settings·playbook·archive·card:<별칭> */
       menuView: string
     }
   }

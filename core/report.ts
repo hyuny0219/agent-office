@@ -1,7 +1,8 @@
 // 보고서와 인사 기록. 끝낸 일 기록(book.log)으로 기간별 부서 실적을 내고, 직원 명부와 한 명의 인사카드를 만든다.
 // 시간대를 모르므로 기간은 "지금부터 거슬러" 잰다(오늘 = 최근 24시간, 이번 주 = 최근 7일). 순수 함수만 둔다.
 import type { BossRating, Employee, HrBook, JobRecord, OfficeAgent, Retiree } from '../types'
-import { BOSS_RATE_POINTS, bonusOf, CHECK_PENALTY, DEPT_INFO, DEPTS, gradeOf, isMuted, LEAD_ALLOWANCE, leadOf, lessonKey, lessonsFor, RANKS, rankOf, REWORK_PENALTY, salaryOf, tipOf } from './hr'
+import { BOSS_RATE_POINTS, bonusOf, CHECK_PENALTY, DEPT_INFO, DEPTS, deptFor, deptOf, gradeOf, isMuted, LEAD_ALLOWANCE, leadOf, lessonKey, lessonsFor, MAX_LOG, RANKS, rankOf, REWORK_PENALTY, salaryOf, tipOf, typeKey } from './hr'
+import { monthsOf } from './archive'
 import { REJECT_PENALTY } from './approval'
 import { CONTROL_EVERY, effectText } from './trial'
 import { accuracyBlocks } from './org'
@@ -256,9 +257,10 @@ export function rosterBlocks(b: HrBook, now: number): Block[] {
     { t: 'bullet', text: `평가: 완료 +10, 실패 -5(중단 -3), 도구 오류 1개당 -1(최대 -5), 오류 없이 완료 +3, 테스트·빌드 실패한 채 완료 -${CHECK_PENALTY}, 끝낸 뒤 BOSS가 같은 파일을 다시 고치면 재작업 -${REWORK_PENALTY}, 결재 반려 -${REJECT_PENALTY}` },
     { t: 'bullet', text: `대표 평가: 끝낸 일에 좋음 +${BOSS_RATE_POINTS} · 아쉬움 -${BOSS_RATE_POINTS}(메뉴의 인사카드, /office rate <별칭> good|bad|clear). 결재 정확도(승인+아쉬움은 놓친 승인, 반려+좋음은 빗나간 반려)와 적임자 배정에도 쓴다. 떠난 직원은 평가하지 않는다` },
     { t: 'bullet', text: '직급: 사원 0 · 대리 20 · 과장 60 · 차장 120 · 부장 200(경력, 감점이면 깎여 강등). 평균 평가는 최근 일에 무게를 둡니다' },
-    { t: 'bullet', text: `예산: ${DEPTS.some(d => b.budgets[d] !== undefined) ? DEPTS.flatMap(d => (b.budgets[d] === undefined ? [] : [`${DEPT_INFO[d].ko} 하루 ${usdText(b.budgets[d] ?? 0)}`])).join(' · ') : '없음'}(넘으면 하루 한 번 알림, /office budget <부서> <달러>|off)` },
+    { t: 'bullet', text: `예산: ${DEPTS.some(d => b.budgets[d] !== undefined) ? DEPTS.flatMap(d => (b.budgets[d] === undefined ? [] : [`${DEPT_INFO[d].ko} 하루 ${usdText(b.budgets[d] ?? 0)}`])).join(' · ') : '없음'}(넘으면 하루 한 번 알리고, 그 부서에 새 일을 맡길 때 계속·이번만·맡기지 않기를 묻는다. /office budget <부서> <달러>|off)` },
     { t: 'bullet', text: '부서 지침: 반복되는 흠으로 만든 개선안을 대표가 채택하면 그 부서 업무 지시에 붙고 전후 성적을 견준다(/office playbook, 메뉴 6)' },
-    { t: 'bullet', text: '배정: 쉬고 있는 부서 직원 중 비슷한 일을 잘 끝낸 사람·평균 평가가 높은 사람에게 맡깁니다' },
+    { t: 'bullet', text: '배정: 쉬고 있는 부서 직원 중 비슷한 일을 잘 끝낸 사람·평균 평가가 높은 사람에게 맡깁니다. 에이전트 종류의 부서는 /office dept <종류> <부서>로 바꿉니다' },
+    { t: 'bullet', text: `기록: 업무 기록은 최근 ${MAX_LOG}건을 두고, 밀려난 오래된 일은 월별 요약으로 접어 둡니다(메뉴 7). /office export [json|csv]로 내보냅니다` },
     { t: 'bullet', text: '조직 개편: 계속 평가가 나쁘면 권고사직, 오래 일이 없으면 계약 종료(/office reorg on|off)' },
     { t: 'bullet', text: '한 사람의 인사카드는 /office hr <별칭>, 부서 실적 보고는 /office report [today|week], 메뉴 화면은 /office menu' })
   return out
@@ -266,3 +268,35 @@ export function rosterBlocks(b: HrBook, now: number): Block[] {
 
 /** /office hr: 인사 명부(글) */
 export const rosterText = (b: HrBook, now: number): string => textOf(rosterBlocks(b, now))
+
+/** 월별 실적 화면: 접어 둔 요약과 남은 업무 기록을 달마다(최근 12달) */
+export function archiveBlocks(b: HrBook): Block[] {
+  const months = monthsOf(b)
+  const out: Block[] = [{ t: 'title', text: '월별 기록' },
+    { t: 'line', text: `업무 기록은 최근 ${MAX_LOG}건을 두고, 밀려난 오래된 일은 지우지 않고 달마다 요약해 둡니다.` }]
+  if (months.length === 0) return [...out, { t: 'line', text: '아직 끝낸 일이 없습니다.' }]
+  out.push({ t: 'table', head: ['달', '업무', '완료', '실패·중단', '평균 평가', '비용', '재작업', '반려', '대표 좋음/아쉬움', '가장 많이 일한 부서'],
+    align: ['l', 'r', 'r', 'r', 'r', 'r', 'r', 'r', 'r', 'l'],
+    rows: months.slice(0, 12).map(m => {
+      const top = (Object.entries(m.depts) as [keyof typeof DEPT_INFO, { jobs: number }][]).sort((x, y) => y[1].jobs - x[1].jobs)[0]
+      return [m.month, `${m.jobs}`, `${m.done}`, `${m.failed}`, m.jobs === 0 ? '-' : (m.scoreSum / m.jobs).toFixed(1), usdText(m.usd), `${m.reworks}`, `${m.rejected}`, `${m.good}/${m.bad}`,
+        top === undefined ? '-' : `${DEPT_INFO[top[0]].ko} ${top[1].jobs}건`]
+    }) })
+  if (months.length > 12) out.push({ t: 'line', text: `그 전 ${months.length - 12}달은 내보내기로 봅니다.` })
+  out.push({ t: 'gap' }, { t: 'line', text: '내보내기: /office export json(인사 기록 통째) · /office export csv(업무 기록·월별 요약, 엑셀용)' })
+  return out
+}
+
+/** 배치를 보일 에이전트 종류: 직원이 맡아 본 종류와 대표가 바꾼 종류 */
+export const knownTypesOf = (b: HrBook): string[] =>
+  [...new Set([...[...b.employees, ...b.retired].map(e => typeKey(e.type)).filter(k => k !== '' && k !== 'agent' && k !== 'main'), ...Object.keys(b.deptMap ?? {})])].sort()
+
+/** 부서 배치 표: 종류마다 지금 부서·기본 부서 */
+export function deptMapBlocks(b: HrBook): Block[] {
+  const types = knownTypesOf(b)
+  const out: Block[] = [{ t: 'section', text: '부서 배치(에이전트 종류 → 부서)' }]
+  if (types.length === 0) out.push({ t: 'line', text: '아직 일을 맡은 에이전트 종류가 없습니다. 표에 없는 종류는 지원팀으로 갑니다.' })
+  else out.push({ t: 'table', head: ['종류', '부서', '기본'], rows: types.map(k => [k, DEPT_INFO[deptFor(b, k)].ko, b.deptMap?.[k] === undefined ? '(기본)' : DEPT_INFO[deptOf(k)].ko]) })
+  out.push({ t: 'line', text: '바꾸기: /office dept <종류> <부서> · 되돌리기: /office dept <종류> reset. 이미 뽑은 직원은 제 부서에 남고, 새로 맡기는 일부터 바뀐 부서로 갑니다.' })
+  return out
+}

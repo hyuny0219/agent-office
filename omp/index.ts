@@ -1,11 +1,15 @@
 // agent-office for oh-my-pi. 서브에이전트(task 도구)를 부서 직원으로 받아 평가·결재·인사 기록을 남기고, 입력창 위에 사무실을 보인다.
 // 판단은 모두 core/(Claude Code판과 같은 코드)가 하고, 여기서는 oh-my-pi의 사건·화면·저장소를 잇기만 한다.
 // 인사 기록은 Claude Code판과 따로 ~/.omp/agent-office/hr.json에 남는다.
+import { mkdirSync, writeFileSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { join, resolve } from 'node:path'
+
 import { completeSimple } from '@oh-my-pi/pi-ai'
 
-import type { Dept, Employee, HrBook, OfficeAgent } from '../types'
+import type { Dept, Employee, OfficeAgent } from '../types'
 import { answerWith } from '../core/answer'
-import { decide, deptOf, DEPTS, handOff, hire, leadOf, learn, lessonsFor, record, review, rework, salaryOf, assign, briefOf } from '../core/hr'
+import { decide, deptFor, DEPTS, handOff, hire, leadOf, learn, lessonsFor, record, review, rework, salaryOf, assign, briefOf } from '../core/hr'
 import { decisionOf, decisionToast, REJECT_PENALTY, rejectNoteOf, requestOf, routeOf } from '../core/approval'
 import type { Facts } from '../core/approval'
 import { followUp, isRejectTrusted, pickFor, reorgOf } from '../core/org'
@@ -15,14 +19,14 @@ import { isCheckCommand } from '../core/watch'
 import { activityOf, layoutOf, nickFor, Office } from '../core/scene'
 import { addTokens, chargeReview, priceOf, usdOf } from '../core/tokens'
 import type { TokenUse } from '../types'
-import { feedRowsOf, rowsOf } from '../core/rows'
-import { budgetBlocks, noticed, overrunsOf, overrunText } from '../core/budget'
-import { cardBlocks, findEmployee, reportBlocks, rosterBlocks } from '../core/report'
-import { mdOf, textOf, widthOf } from '../core/table'
-import { playbookBlocks } from '../core/playbook'
-import type { Block } from '../core/table'
+import { BUDGET_CHOICES, budgetDenyText, budgetQuestion, choiceOf, noticed, overrunsOf, overrunText, waive } from '../core/budget'
+import type { BudgetChoice } from '../core/budget'
+import { textOf } from '../core/table'
 import { ansiLines } from './ansi'
-import { agents, changed, feedOf, hr, onChange, patch, saveHr, say, takeLoadWarning, trim } from './store'
+import { agents, changed, feedOf, hr, HR_DIR, onChange, patch, saveHr, say, takeLoadWarning, trim } from './store'
+import { menuLines, MENU, sideLines, TOGGLES, viewBlocks, widgetLines } from './view'
+import type { PlanLines, Scene } from './view'
+import { descriptionOf, gatesFor, tasksOf } from './tasks'
 
 // oh-my-pi의 형식은 확장 쪽에서 느슨하게 받는다(판마다 바뀌는 타입에 묶이지 않도록)
 type Ctx = any
@@ -67,7 +71,8 @@ function busy(): Set<string> {
 /** 그 부서에서 이 일을 맡을 직원(적임자, 없으면 쉬는 사람, 없으면 새로 뽑는다) */
 function staff(type: string, description: string): { employee: Employee; why: string | null } {
   const b = hr()
-  const dept = deptOf(type)
+  // 대표가 바꾼 배치를 먼저 본다
+  const dept = deptFor(b, type)
   const picked = description.trim() === '' ? null : pickFor(b, dept, busy(), description)
   if (picked !== null) return picked
   const had = assign(b, dept, busy())
@@ -80,12 +85,9 @@ function staff(type: string, description: string): { employee: Employee; why: st
 
 const freshAgent = (id: string, type: string, nick: string, description: string, parentId: string | null): OfficeAgent => ({
   id, type, nick, description, model: null, startedAt: now(), endedAt: null, activity: type === 'main' ? 'idle' : 'think', tool: null, tools: 0,
-  parentId, ...(type === 'main' ? {} : { dept: deptOf(type) as Dept }),
+  parentId, ...(type === 'main' ? {} : { dept: deptFor(hr(), type) }),
 })
 
-/** 서브에이전트가 받은 지시에서 업무 설명(첫 줄다운 줄) */
-const descriptionOf = (prompt: string): string =>
-  prompt.split('\n').map(l => l.trim()).find(l => l !== '' && !/^complete assignment/i.test(l))?.slice(0, 80) ?? ''
 
 /** 모델 한 번의 사용량을 TokenUse로(가격을 아는 모델이면 달러까지) */
 function tokensOfUsage(u: any, model: string | undefined): TokenUse | null {
@@ -155,7 +157,7 @@ function appraise(ctx: Ctx, a: OfficeAgent, isDone: boolean) {
     const employee = withTokens.employees.find(y => y.nick === a.nick)
     job = employee?.jobs ?? 0
     const logged = record(withTokens, {
-      nick: a.nick, dept: a.dept ?? deptOf(a.type), job, description: got.description, startedAt: got.startedAt, endedAt: ended,
+      nick: a.nick, dept: a.dept ?? deptFor(x, a.type), job, description: got.description, startedAt: got.startedAt, endedAt: ended,
       outcome: isDone ? 'done' : 'failed', score, errors: got.errors ?? 0, isCheckFailed: isDone && got.isCheckFailed === true, isReworked: false,
       alarms: got.alarms ?? 0, files: (got.files ?? []).length, ...(employee === undefined ? {} : { salary: salaryOf(withTokens, employee) }),
       ...(got.tokens === undefined ? {} : { tokens: got.tokens }),
@@ -216,6 +218,25 @@ let frame = 0
 /** 위젯이 받은 화면(사이드바를 띄울 때 쓴다) */
 let lastTui: any = null
 
+/** 지금 사무실(화면 줄 만들기에 넘긴다) */
+const sceneNow = (): Scene => ({ agents: [...agents.values()], book: hr(), feed: feedOf(), now: now() })
+
+/** 그 폭의 평면도 줄을 만드는 함수(평면도를 켰을 때만). 폭이 바뀌면 평면도를 새로 만든다 */
+function planOf(get: () => Office | null, set: (o: Office) => void): PlanLines {
+  if (!isPlanShown) return null
+  return (columns: number) => {
+    const layout = layoutOf(columns)
+    let o = get()
+    if (o === null || o.layout.columns !== layout.columns) {
+      o = new Office(layout)
+      set(o)
+    }
+    const b = hr()
+    const leads = Object.fromEntries(DEPTS.map(d => [d, leadOf(b, d)?.nick]).filter(([, n]) => n !== undefined))
+    return ansiLines(o.draw([...agents.values()], frame, now(), leads), layout.columns, layout.rows)
+  }
+}
+
 // ── 사이드바(켜야 보임): 오른쪽에 겹쳐 띄우는 사무실. 일반 터미널에서 겹친 화면이 떠 있으면 omp는 전역 단축키(Ctrl+O 등)를 쉬게 하므로
 // 기본은 입력창 위 2단 패널이다. 사이드바는 키를 받지 않아(handleInput 없음), omp가 정한 곳(입력창·승인 창)으로 키가 그대로 간다 ─────────────
 
@@ -234,25 +255,9 @@ function sideComponent(beforeRender: () => void) {
   return {
     render(width: number): string[] {
       beforeRender()
-      const b = hr()
-      const t = now()
-      const list = [...agents.values()]
-      const inner = Math.max(10, width - 2)
-      const bar = `\x1b[2m│\x1b[0m `
-      const lines: string[] = [`\x1b[2m╭${'─'.repeat(Math.max(0, width - 1))}\x1b[0m`, `${bar}\x1b[1m에이전트 사무실\x1b[0m \x1b[2m(/office side 닫기 · /office menu)\x1b[0m`]
-      if (isPlanShown && inner >= 72) {
-        const layout = layoutOf(inner)
-        if (sideOffice === null || sideOffice.layout.columns !== layout.columns) sideOffice = new Office(layout)
-        const leads = Object.fromEntries(DEPTS.map(d => [d, leadOf(b, d)?.nick]).filter(([, n]) => n !== undefined))
-        for (const l of ansiLines(sideOffice.draw(list, frame, t, leads), layout.columns, layout.rows)) lines.push(`${bar}${l}`)
-      }
-      const rows = rowsOf(list, b, t, inner)
-      for (const r of rows.length === 0 ? [{ text: '아직 일하는 에이전트가 없습니다', isOff: true, isBad: false }] : rows) lines.push(`${bar}${r.isOff ? `\x1b[2m${r.text}\x1b[0m` : r.isBad ? `\x1b[31m${r.text}\x1b[0m` : r.text}`)
-      const feed = feedRowsOf(feedOf(), t)
-      lines.push(bar, `${bar}\x1b[1m사내 메신저\x1b[0m`, ...(feed.length === 0 ? [`${bar}\x1b[2m아직 오간 말이 없습니다\x1b[0m`] : feed.map(f => `${bar}\x1b[2m${f.text}\x1b[0m`)))
-      // 내용 높이만큼의 테두리 상자(화면 높이를 채우면 omp가 위에서부터 그리는 입력창·상태 줄을 가린다)
-      lines.push(`\x1b[2m╰${'─'.repeat(Math.max(0, width - 1))}\x1b[0m`)
-      return lines.map(l => clip(l, width))
+      return sideLines(width, sceneNow(), planOf(() => sideOffice, o => {
+        sideOffice = o
+      }))
     },
     invalidate() {},
     dispose() {
@@ -311,32 +316,9 @@ export function officeComponent(tui: any) {
   return {
     render(width: number): string[] {
       if (isSideShown(width)) return []
-      const b = hr()
-      const t = now()
-      const list = [...agents.values()]
-      const lines: string[] = []
-      if (isPlanShown && width >= 72) {
-        const layout = layoutOf(width)
-        if (office === null || office.layout.columns !== layout.columns) office = new Office(layout)
-        const leads = Object.fromEntries(DEPTS.map(d => [d, leadOf(b, d)?.nick]).filter(([, n]) => n !== undefined))
-        lines.push(...ansiLines(office.draw(list, frame, t, leads), layout.columns, layout.rows))
-      }
-      // 2단: 왼쪽 사무실 목록 | 오른쪽 사내 메신저(좁으면 위아래로)
-      const isTwo = width >= TWO_COLUMN_MIN
-      const leftW = isTwo ? Math.floor(width * 0.55) : width
-      const rightW = isTwo ? width - leftW - 3 : width
-      const rows = rowsOf(list, b, t, leftW)
-      const left = rows.length === 0 ? ['\x1b[2m에이전트 사무실: 아직 일하는 에이전트가 없습니다 (/office menu)\x1b[0m'] : rows.map(r => (r.isOff ? `\x1b[2m${r.text}\x1b[0m` : r.isBad ? `\x1b[31m${r.text}\x1b[0m` : r.text))
-      const feed = feedRowsOf(feedOf(), t).slice(isTwo ? -Math.max(left.length, 3) : -2)
-      const right = feed.length === 0 ? ['\x1b[2m사내 메신저: 아직 오간 말이 없습니다\x1b[0m'] : feed.map(f => `\x1b[2m${f.text}\x1b[0m`)
-      if (!isTwo) {
-        lines.push(...left.map(l => clip(l, width)), ...right.map(l => clip(l, width)))
-        return lines.map(l => clip(l, width))
-      }
-      for (let i = 0; i < Math.max(left.length, right.length); i++) {
-        lines.push(`${pad(left[i] ?? '', leftW)} \x1b[2m│\x1b[0m ${clip(right[i] ?? '', rightW)}`)
-      }
-      return lines.map(l => clip(l, width))
+      return widgetLines(width, sceneNow(), planOf(() => office, o => {
+        office = o
+      }))
     },
     invalidate() {},
     dispose() {
@@ -345,93 +327,29 @@ export function officeComponent(tui: any) {
   }
 }
 
-/** 2단 패널을 쓰는 최소 폭 */
-const TWO_COLUMN_MIN = 90
-
-/** 보이는 칸 수에 맞춰 자르고 모자라면 빈칸으로 채운다 */
-function pad(line: string, width: number): string {
-  const cut = clip(line, width)
-  const seen = widthOf(cut.replace(/\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, ''))
-  return `${cut}${' '.repeat(Math.max(0, width - seen))}`
-}
-
-/** 보이는 칸 수로 자른다(ANSI 코드는 칸을 차지하지 않는다) */
-function clip(line: string, width: number): string {
-  let out = ''
-  let w = 0
-  // 색(SGR)·지우기 같은 CSI와 링크(OSC)는 칸을 차지하지 않는다
-  for (const m of line.matchAll(/\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|[\s\S]/gu)) {
-    const s = m[0]
-    if (s.startsWith('\x1b')) {
-      out += s
-      continue
-    }
-    const cw = widthOf(s)
-    if (w + cw > width) break
-    out += s
-    w += cw
-  }
-  return `${out}\x1b[0m`
-}
-
-// ── 메뉴 화면: 1~5로 고른 것을 표로, 설정은 그 자리에서 켜고 끈다 ─────────────
-
-const MENU = [
-  { key: '1', label: '인사 명부', view: 'hr' },
-  { key: '2', label: '일간 보고', view: 'today' },
-  { key: '3', label: '주간 보고', view: 'week' },
-  { key: '4', label: '예산', view: 'budget' },
-  { key: '5', label: '설정', view: 'settings' },
-  { key: '6', label: '지침', view: 'playbook' },
-] as const
-const TOGGLES = [
-  { key: 'a', label: '결재', isOn: (b: HrBook) => b.isApproving, flip: (b: HrBook): HrBook => ({ ...b, isApproving: !b.isApproving }) },
-  { key: 'r', label: '조직 개편', isOn: (b: HrBook) => b.isReorganizing, flip: (b: HrBook): HrBook => ({ ...b, isReorganizing: !b.isReorganizing }) },
-  { key: 'm', label: '인사 메모', isOn: (b: HrBook) => b.isCoaching, flip: (b: HrBook): HrBook => ({ ...b, isCoaching: !b.isCoaching }) },
-  { key: 't', label: '교육 효과 측정', isOn: (b: HrBook) => b.isTrialing, flip: (b: HrBook): HrBook => ({ ...b, isTrialing: !b.isTrialing }) },
-] as const
-
-function viewBlocks(view: string): Block[] {
-  const b = hr()
-  const t = now()
-  if (view.startsWith('card:')) {
-    const who = findEmployee(b, view.slice(5))
-    return who === undefined ? [{ t: 'line', text: `${view.slice(5)}라는 직원이 없습니다.` }] : cardBlocks(b, who, t)
-  }
-  if (view === 'today' || view === 'week') return reportBlocks(b, view, t, [...agents.values()])
-  if (view === 'budget') {
-    const blocks = budgetBlocks(b, [...agents.values()], t)
-    return blocks.length > 0 ? blocks : [{ t: 'title', text: '부서 예산' }, { t: 'line', text: '부서 예산이 없습니다. /office budget <부서> <달러> (예: /office budget 개발팀 5)' }]
-  }
-  if (view === 'playbook') return playbookBlocks(b, t)
-  if (view === 'settings') return [{ t: 'title', text: '설정' }, { t: 'line', text: '글자를 누르면 바로 켜고 끕니다.' }, ...TOGGLES.map(x => ({ t: 'bullet', text: `${x.key}: ${x.isOn(b) ? '[켜짐]' : '[꺼짐]'} ${x.label}` } as const))]
-  return rosterBlocks(b, t)
-}
+// ── 메뉴 화면: 1~7로 고른 것을 표로, 설정은 그 자리에서 켜고 끈다 ─────────────
 
 async function openMenu(ctx: Ctx, first: string) {
   if (ctx.hasUI === false || ctx.ui?.custom === undefined) {
-    ctx.ui?.notify?.(textOf(viewBlocks(first)), 'info')
+    ctx.ui?.notify?.(textOf(viewBlocks(first, sceneNow())), 'info')
     return
   }
-  let markdown: any = null
+  let markdown: ((md: string, width: number) => string[]) | null = null
   try {
     // 패키지의 하위 경로는 omp가 실행할 때 푼다(타입 검사 쪽에서는 이름만 넘긴다)
     const tuiPath = '@oh-my-pi/pi-tui'
     const themePath = '@oh-my-pi/pi-tui/theme/tui-adapters'
     const tuiMod: any = await import(tuiPath)
     const themeMod: any = await import(themePath)
-    markdown = (text: string) => new tuiMod.Markdown(text, 1, 0, themeMod.getMarkdownTheme())
+    markdown = (md: string, width: number) => [...new tuiMod.Markdown(md, 1, 0, themeMod.getMarkdownTheme()).render(width)]
   } catch {
     markdown = null
   }
   await ctx.ui.custom((tui: any, _theme: any, _kb: any, done: (r: undefined) => void) => {
     let view = first
-    const head = () => `${MENU.map(m => (m.view === view ? `\x1b[7m ${m.key} ${m.label} \x1b[0m` : ` ${m.key} ${m.label} `)).join(' ')}   \x1b[2mq 닫기\x1b[0m`
     return {
       render(width: number): string[] {
-        const blocks = viewBlocks(view)
-        const body = markdown === null ? textOf(blocks).split('\n') : [...markdown(mdOf(blocks)).render(width)]
-        return [clip(head(), width), '', ...body.map((l: string) => clip(l, width))]
+        return menuLines(view, width, sceneNow(), markdown)
       },
       handleInput(data: string) {
         const m = MENU.find(x => x.key === data)
@@ -445,11 +363,57 @@ async function openMenu(ctx: Ctx, first: string) {
   }, { overlay: true })
 }
 
+// ── 예산 조치: 한도를 넘은 부서에 새 일(task)을 맡기기 전에 묻는다(계속 / 이번만 / 맡기지 않기) ─────────────
+
+/** 확인 창이 떠 있는 부서(나란히 맡겨도 부서마다 한 번만 묻는다) */
+const asking = new Map<Dept, Promise<BudgetChoice>>()
+
+/**
+ * 맡기지 않으면 그 까닭(모델이 받을 글), 맡기면 null. 물을 수 없으면(창이 없거나 닫힘) 맡기지 않는다.
+ * 한 번의 task에 여러 부서가 섞이면 부서마다 묻고, 하나라도 맡기지 않으면 그 호출 전체를 막는다(앞에서 고른 "계속"은 남는다)
+ */
+async function gateTask(ctx: Ctx, input: Record<string, unknown>): Promise<string | null> {
+  if (Object.keys(hr().budgets).length === 0) return null
+  const at = now()
+  for (const { o, what } of gatesFor(hr(), [...agents.values()], tasksOf(input), at)) {
+    const dept = o.dept
+    let pending = asking.get(dept)
+    if (pending === undefined) {
+      const ask: Promise<string | undefined> = ctx.hasUI === false || typeof ctx.ui?.select !== 'function'
+        ? Promise.resolve(undefined)
+        : Promise.resolve(ctx.ui.select(budgetQuestion(o, what), [BUDGET_CHOICES.go, BUDGET_CHOICES.once, BUDGET_CHOICES.stop]))
+      pending = ask.then(choiceOf, (): BudgetChoice => 'stop').finally(() => asking.delete(dept))
+      asking.set(dept, pending)
+    }
+    const choice = await pending
+    if (choice === 'go') saveHr(x => waive(x, dept, at))
+    if (choice === 'stop') {
+      ctx.ui?.notify?.(`${overrunText(o)}. 새 일을 맡기지 않았습니다(한도를 바꾸려면 /office budget ${dept} <달러>)`, 'warning')
+      say(hrLineOf(`새 일 보류 — ${overrunText(o)}`, at))
+      return budgetDenyText(o)
+    }
+  }
+  return null
+}
+
+// ── 내보내기: 기본은 인사 기록 옆 exports/ 폴더 ─────────────
+
+function writeExports(files: readonly { name: string; text: string }[], dir: string | null): string[] {
+  // ~/는 홈 폴더로 편다
+  const root = dir === null ? join(HR_DIR, 'exports') : resolve(dir === '~' || dir.startsWith('~/') ? join(homedir(), dir.slice(1)) : dir)
+  mkdirSync(root, { recursive: true, mode: 0o700 })
+  return files.map(f => {
+    const path = join(root, f.name)
+    writeFileSync(path, f.text, { mode: 0o600 })
+    return path
+  })
+}
+
 // ── 사건 연결 ─────────────
 
 export default function agentOffice(pi: Pi) {
   pi.registerCommand('office', {
-    description: '에이전트 사무실: 인자 없이 평면도 켜고 끄기, side(오른쪽 사이드바 켜고 끄기), menu(메뉴 화면), playbook [<부서> adopt <n|all>|<부서> drop <n>](부서 지침), report [today|week], hr [<별칭>], rate <별칭> good|bad|clear, budget, approval·reorg·hr on|off',
+    description: '에이전트 사무실: 인자 없이 평면도 켜고 끄기, side(오른쪽 사이드바 켜고 끄기), menu(메뉴 화면), export [json|csv] [<폴더>](내보내기), dept [<종류> <부서>|<종류> reset](부서 배치), playbook [<부서> adopt <n|all>|<부서> drop <n>](부서 지침), report [today|week], hr [<별칭>], rate <별칭> good|bad|clear, budget, approval·reorg·hr on|off',
     handler: async (args: string, ctx: Ctx) => {
       const a = (args ?? '').trim()
       if (a === '') {
@@ -470,9 +434,9 @@ export default function agentOffice(pi: Pi) {
         ctx.ui?.notify?.(on === null ? '사이드바를 띄울 수 없는 화면입니다(대화형 터미널에서만).' : on ? `사이드바를 켭니다(터미널 폭 ${SIDE_MIN_COLUMNS}칸 이상일 때 보임). 끄려면 /office side` : '사이드바를 끕니다.', 'info')
         return
       }
-      const text = await answerWith({ book: async () => hr(), save: async fn => void saveHr(fn), agents: async () => [...agents.values()], now: async () => now() }, a)
+      const text = await answerWith({ book: async () => hr(), save: async fn => void saveHr(fn), agents: async () => [...agents.values()], now: async () => now(), write: async (files, dir) => writeExports(files, dir) }, a)
       if (text === null) {
-        ctx.ui?.notify?.(`모르는 명령입니다: /office ${a}. 쓰는 법: /office [menu | report today|week | hr [<별칭>] | rate <별칭> good|bad|clear | budget | approval|reorg|hr on|off]`, 'warning')
+        ctx.ui?.notify?.(`모르는 명령입니다: /office ${a}. 쓰는 법: /office [menu | side | export [json|csv] | dept [<종류> <부서>] | report today|week | hr [<별칭>] | rate <별칭> good|bad|clear | budget | playbook | approval|reorg|hr on|off]`, 'warning')
         return
       }
       changed()
@@ -519,6 +483,11 @@ export default function agentOffice(pi: Pi) {
 
   pi.on('tool_call', async (e: any, ctx: Ctx) => {
     const id = ctx.agent?.kind === 'sub' ? ctx.agent.id : 'main'
+    // 예산을 넘은 부서에 새 일을 맡기려 하면 먼저 묻는다(맡기지 않으면 task를 막고 까닭을 모델에 돌려준다)
+    if (String(e.toolName ?? '') === 'task') {
+      const denied = await gateTask(ctx, (e.input ?? {}) as Record<string, unknown>)
+      if (denied !== null) return { block: true, reason: denied }
+    }
     const a = agents.get(id)
     // 끝난 사람(평가를 마친 서브에이전트)의 늦은 도구는 세지 않는다
     if (a === undefined || (id !== 'main' && a.endedAt !== null)) return

@@ -4,7 +4,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface } from 'claude-code'
 
 import type { Bubble, HrBook, OfficeAgent, TokenUse, Utterance } from '../types'
-import { assign, DEPTS, deptOf, emptyBook, hire, leadOf, migrate } from '../core/hr'
+import { assign, DEPTS, deptFor, deptOf, emptyBook, hire, leadOf, migrate } from '../core/hr'
 import { pickFor } from '../core/org'
 import type { Assignment } from '../core/org'
 import { pushLine } from '../core/speech'
@@ -87,7 +87,7 @@ export async function agentsOf($: EngineInterface): Promise<OfficeAgent[]> {
       // 토큰은 지금 모양으로 읽는다(달러를 세기 전 v0.10의 토큰은 가격 모름으로)
       const { tokens: had, ...rest } = a
       const tokens = tokensOf(had)
-      loaded.push({ ...rest, nick, dept: a.dept ?? (a.id === 'main' ? undefined : deptOf(a.type)), ...(tokens === undefined ? {} : { tokens }) })
+      loaded.push({ ...rest, nick, dept: a.dept ?? (a.id === 'main' ? undefined : deptFor(b, a.type)), ...(tokens === undefined ? {} : { tokens }) })
     }
     cache = loaded
   }
@@ -148,7 +148,8 @@ export const fresh = (id: string, type: string, description: string, now: number
  */
 export async function staff($: EngineInterface, type: string, description = ''): Promise<Assignment> {
   const b = await hrOf($)
-  const dept = deptOf(type)
+  // 대표가 바꾼 배치를 먼저 본다
+  const dept = deptFor(b, type)
   const agents = await agentsOf($)
   const busy = busyOf(agents)
   const picked = description.trim() === '' ? null : pickFor(b, dept, busy, description)
@@ -156,14 +157,17 @@ export async function staff($: EngineInterface, type: string, description = ''):
   const had = assign(b, dept, busy)
   if (had !== undefined) return { employee: had, why: null }
   const hired = hire(b, newNick(type, agents, b), dept, type, await $.clock.now())
-  await saveHr($, () => hired.book)
+  // 저장은 그때의 최신 기록 위에(기다리는 사이 다른 저장이 남긴 업무 기록·월별 요약을 덮지 않도록)
+  await saveHr($, x => (x.employees.some(e => e.nick === hired.employee.nick) ? x : { ...x, employees: [...x.employees, hired.employee] }))
   return { employee: hired.employee, why: null }
 }
 
 /** 사무실에 들인다(별칭이 정해져 있으면 그대로, 같은 id가 있으면 바꾼다) */
 export async function admit($: EngineInterface, agent: Omit<OfficeAgent, 'nick'>, nick?: string, extra: (list: OfficeAgent[]) => OfficeAgent[] = l => l) {
   const chosen = nick ?? (agent.type === 'main' ? 'BOSS' : (await staff($, agent.type)).employee.nick)
-  await save($, list => extra([...list.filter(a => a.id !== agent.id), { ...agent, nick: chosen }]))
+  // 부서는 맡은 직원의 부서로(배치를 바꾼 뒤에도 이미 뽑힌 직원은 제 부서에서 일한다)
+  const dept = agent.type === 'main' ? undefined : (await hrOf($)).employees.find(e => e.nick === chosen)?.dept ?? agent.dept
+  await save($, list => extra([...list.filter(a => a.id !== agent.id), { ...agent, nick: chosen, dept }]))
 }
 
 export async function ensure($: EngineInterface, id: string) {

@@ -3,15 +3,17 @@
 import type { HrBook, OfficeAgent } from '../types'
 
 import { APPROVER_MODEL, REJECT_PENALTY } from './approval'
-import { cardOf, findEmployee, reportOf, rosterText } from './report'
+import { cardOf, deptMapBlocks, findEmployee, reportOf, rosterText } from './report'
 import type { Period } from './report'
 import { IDLE_JOBS, IDLE_MS, RETIRE_AVG, RETIRE_JOBS } from './org'
 import { CONTROL_EVERY } from './trial'
-import { budgetLines, deptNamed, dollarsOf } from './budget'
+import { budgetLines, deptNamed, dollarsOf, unwaive } from './budget'
+import { exportFiles } from './archive'
+import type { ExportKind } from './archive'
 import { adopt, dropRule, MAX_RULES, playbookBlocks, proposalsOf, roomOf } from './playbook'
 import { textOf } from './table'
 import { usdText } from './tokens'
-import { BOSS_RATE_POINTS, DEPT_INFO, DEPTS, rate } from './hr'
+import { BOSS_RATE_POINTS, DEPT_INFO, DEPTS, deptFor, deptOf, isTypeKey, MAX_DEPT_MAP, rate, setDept, typeKey } from './hr'
 
 /** 평가로 직급이 바뀌었으면 한마디 */
 export const rankChangeText = (m: { promotedTo: string | null; demotedTo: string | null } | null): string =>
@@ -26,8 +28,8 @@ const withRo = (word: string): string => {
 
 export const COMMAND = {
   name: 'office',
-  description: '에이전트 사무실 평면도 보기. menu: 메뉴 화면(인사 명부·보고서·예산·설정·지침을 표로), playbook [<부서> adopt <n|all>|<부서> drop <n>]: 부서 지침(평가로 만든 개선안을 채택), rate <별칭> good|bad|clear: 최근 끝낸 일에 대표 평가, budget [<부서> <달러>|<부서> off]: 부서별 하루 비용 한도, approval on|off: 보고·계획 결재 켜고 끄기, reorg on|off: 조직 개편(권고사직·계약 종료) 켜고 끄기, report [today|week]: 일간·주간 보고, hr: 인사 기록(부서·직급·연봉·평가), hr <별칭>: 인사카드, hr on|off: 업무 지시 인사 메모 켜고 끄기, hr ab on|off: 교육 효과 측정(비교군) 켜고 끄기',
-  argumentHint: '[menu | playbook [<부서> adopt <n|all>|<부서> drop <n>] | rate <별칭> good|bad|clear | budget [<부서> <달러>|<부서> off] | approval on|off | reorg on|off | report [today|week] | hr [<별칭>|on|off|ab on|off]]',
+  description: '에이전트 사무실 평면도 보기. menu: 메뉴 화면(인사 명부·보고서·예산·설정·지침·월별 기록을 표로), export [json|csv] [<폴더>]: 인사 기록 내보내기, dept [<종류> <부서>|<종류> reset]: 에이전트 종류의 부서 배치, playbook [<부서> adopt <n|all>|<부서> drop <n>]: 부서 지침(평가로 만든 개선안을 채택), rate <별칭> good|bad|clear: 최근 끝낸 일에 대표 평가, budget [<부서> <달러>|<부서> off]: 부서별 하루 비용 한도, approval on|off: 보고·계획 결재 켜고 끄기, reorg on|off: 조직 개편(권고사직·계약 종료) 켜고 끄기, report [today|week]: 일간·주간 보고, hr: 인사 기록(부서·직급·연봉·평가), hr <별칭>: 인사카드, hr on|off: 업무 지시 인사 메모 켜고 끄기, hr ab on|off: 교육 효과 측정(비교군) 켜고 끄기',
+  argumentHint: '[menu | export [json|csv] [<폴더>] | dept [<종류> <부서>|<종류> reset] | playbook [<부서> adopt <n|all>|<부서> drop <n>] | rate <별칭> good|bad|clear | budget [<부서> <달러>|<부서> off] | approval on|off | reorg on|off | report [today|week] | hr [<별칭>|on|off|ab on|off]]',
 }
 
 /** 명령이 인사 기록과 사무실을 읽고 쓰는 길 */
@@ -36,6 +38,8 @@ export type Desk = {
   save: (fn: (b: HrBook) => HrBook) => Promise<void>
   agents: () => Promise<readonly OfficeAgent[]>
   now: () => Promise<number>
+  /** 내보낼 파일들을 쓴다(dir이 없으면 그 판의 기본 폴더에). 쓴 경로를 돌려준다 */
+  write: (files: readonly { name: string; text: string }[], dir: string | null) => Promise<string[]>
 }
 
 /** 글로 답할 하위 명령이면 그 답, 화면을 열 명령이면 null */
@@ -67,18 +71,18 @@ export async function answerWith(desk: Desk, args: string): Promise<string | nul
       await desk.save(b => {
         const { [dept]: _gone, ...budgets } = b.budgets
         const { [dept]: _told, ...budgetNotices } = b.budgetNotices
-        return { ...b, budgets, budgetNotices }
+        return { ...unwaive(b, dept), budgets, budgetNotices }
       })
       return `${DEPT_INFO[dept].ko} 예산을 없앱니다.`
     }
     const dollars = dollarsOf(arg2 ?? '')
     if (dollars === null) return '쓰는 법: /office budget <부서> <달러>|off (예: /office budget 개발팀 5)'
-    // 새 한도로는 다시 알릴 수 있게 지난 알림을 지운다
+    // 새 한도로는 다시 알리고 다시 물을 수 있게 지난 알림과 "계속"을 지운다
     await desk.save(b => {
       const { [dept]: _was, ...budgetNotices } = b.budgetNotices
-      return { ...b, budgets: { ...b.budgets, [dept]: dollars }, budgetNotices }
+      return { ...unwaive(b, dept), budgets: { ...b.budgets, [dept]: dollars }, budgetNotices }
     })
-    return `${DEPT_INFO[dept].ko} 하루 예산을 ${usdText(dollars)}로 정합니다. 최근 24시간 비용(모델 API 정가로 어림)이 넘으면 하루 한 번 알립니다.`
+    return `${DEPT_INFO[dept].ko} 하루 예산을 ${usdText(dollars)}로 정합니다. 최근 24시간 비용(모델 API 정가로 어림)이 넘으면 하루 한 번 알리고, 그 부서에 새 일을 맡길 때 계속·이번만·맡기지 않기를 묻습니다.`
   }
   if (sub === 'rate') {
     const use = '쓰는 법: /office rate <별칭> good|bad|clear (그 직원이 가장 최근에 끝낸 일에 대표 평가: 좋음 +' + BOSS_RATE_POINTS + ' · 아쉬움 -' + BOSS_RATE_POINTS + ')'
@@ -122,6 +126,36 @@ export async function answerWith(desk: Desk, args: string): Promise<string | nul
       return `${DEPT_INFO[dept].ko} 지침에서 뺍니다: ${rule.text}`
     }
     return '쓰는 법: /office playbook [<부서> adopt <후보 번호|all> | <부서> drop <지침 번호>]'
+  }
+  if (sub === 'dept') {
+    const b = await desk.book()
+    if (arg === undefined || arg === '') return textOf(deptMapBlocks(b))
+    const key = typeKey(arg)
+    if (!isTypeKey(key)) return `${arg}는 에이전트 종류 이름으로 쓸 수 없습니다(글자·숫자·._@- 만).`
+    const use = `쓰는 법: /office dept <종류> <부서>|reset (부서: ${DEPTS.map(d => DEPT_INFO[d].ko).join(', ')})`
+    if (arg2 === undefined || arg2 === '') return `${key}: ${DEPT_INFO[deptFor(b, key)].ko}${b.deptMap?.[key] === undefined ? '(기본)' : ` (기본은 ${DEPT_INFO[deptOf(key)].ko})`}. ${use}`
+    const dept = arg2.toLowerCase() === 'reset' ? null : deptNamed(arg2)
+    if (dept === null && arg2.toLowerCase() !== 'reset') return `${arg2}라는 부서가 없습니다. ${use}`
+    if (dept !== null && b.deptMap?.[key] === undefined && dept !== deptOf(key) && Object.keys(b.deptMap ?? {}).length >= MAX_DEPT_MAP) return `바꾼 배치는 ${MAX_DEPT_MAP}가지 종류까지입니다. 먼저 /office dept <종류> reset으로 되돌리세요.`
+    await desk.save(x => setDept(x, key, dept))
+    const to = DEPT_INFO[dept ?? deptOf(key)].ko
+    return dept === null ? `${key}를 기본 배치(${to})로 되돌립니다.` : `${key}를 ${to}에 배치합니다. 이미 뽑은 직원은 제 부서에 남고, 새로 맡기는 일부터 ${to} 직원이 받습니다.`
+  }
+  if (sub === 'export') {
+    // 꼴을 빼고 폴더만 주면(경로처럼 생긴 것) json으로 본다
+    const isPathFirst = arg !== undefined && /^[~./\\]|^[A-Za-z]:[\\/]/.test(arg)
+    const want = isPathFirst ? 'json' : (arg ?? 'json').toLowerCase()
+    if (want !== 'json' && want !== 'csv') return '쓰는 법: /office export [json|csv] [<폴더>] (json: 인사 기록 통째, csv: 업무 기록과 월별 요약)'
+    // 폴더 이름에는 띄어쓰기가 들 수 있다: 원문에서 꼴 다음부터 끝까지(겹친 빈칸도 그대로)
+    const rest = args.trim().replace(/^\S+\s*/, '')
+    const dir = (isPathFirst ? rest : rest.replace(/^\S+\s*/, '')).trim()
+    const files = exportFiles(await desk.book(), want as ExportKind, await desk.now(), d => DEPT_INFO[d].ko)
+    try {
+      const paths = await desk.write(files, dir === '' ? null : dir)
+      return `내보냈습니다:\n${paths.map(p => `- ${p}`).join('\n')}`
+    } catch (err) {
+      return `내보내지 못했습니다: ${err instanceof Error ? err.message : String(err)}`.split('\n')[0] ?? ''
+    }
   }
   if (sub === 'report') {
     const want = arg?.toLowerCase()

@@ -13,7 +13,7 @@ const meta = JSON.parse(readFileSync(join(root, 'omp', 'package.json'), 'utf8'))
 rmSync(out, { recursive: true, force: true })
 mkdirSync(join(out, 'types'), { recursive: true })
 for (const dir of ['omp', 'core']) {
-  cpSync(join(root, dir), join(out, dir), { recursive: true, filter: src => !src.endsWith('.test.ts') && !src.endsWith('.test.tsx') && !src.endsWith('package.json') && !src.endsWith('README.md') && !src.endsWith('tsconfig.json') })
+  cpSync(join(root, dir), join(out, dir), { recursive: true, filter: src => !/\.(test|spec)\.tsx?$/.test(src) && !src.endsWith('package.json') && !src.endsWith('README.md') && !src.endsWith('tsconfig.json') })
 }
 
 // 데이터 타입만 남긴다(Claude Code의 상태 계약 블록은 뺀다)

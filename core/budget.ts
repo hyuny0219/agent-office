@@ -71,3 +71,45 @@ export const budgetLines = (book: HrBook, agents: readonly OfficeAgent[], now: n
   const blocks = budgetBlocks(book, agents, now)
   return blocks.length === 0 ? [] : textOf(blocks).split('\n')
 }
+
+// ── 예산 조치: 한도를 넘은 부서에 새 일을 맡길 때 대표에게 묻는다(계속 / 이번만 / 중단) ─────
+
+/** 확인 창의 고를 것 */
+export const BUDGET_CHOICES = {
+  go: '계속 맡기기(오늘은 다시 묻지 않음)',
+  once: '이번만 맡기기',
+  stop: '맡기지 않기',
+} as const
+export type BudgetChoice = keyof typeof BUDGET_CHOICES
+
+/** 고른 글 → 무엇을 골랐는지. 모르는 글(직접 쓴 답)이나 답이 없으면 맡기지 않는다 */
+export const choiceOf = (label: string | undefined): BudgetChoice =>
+  label === BUDGET_CHOICES.go ? 'go' : label === BUDGET_CHOICES.once ? 'once' : 'stop'
+
+/** 새 일을 맡기기 전에 물어야 하는 초과: 예산을 넘었고, 최근 24시간 안에 "계속"으로 넘기지 않은 부서면 그 초과, 아니면 null */
+export function gateOf(book: HrBook, agents: readonly OfficeAgent[], dept: Dept, now: number): Overrun | null {
+  const budget = book.budgets[dept]
+  if (budget === undefined) return null
+  const at = book.budgetWaivers?.[dept]
+  if (at !== undefined && now - at <= BUDGET_MS) return null
+  const spent = spentOf(book, agents, dept, now)
+  return spent >= budget ? { dept, spent, budget } : null
+}
+
+/** "계속"을 골랐다: 24시간 동안 그 부서에 새 일을 맡길 때 다시 묻지 않는다 */
+export const waive = (book: HrBook, dept: Dept, now: number): HrBook => ({ ...book, budgetWaivers: { ...book.budgetWaivers, [dept]: now } })
+
+/** 그 부서의 "계속"을 지운다(한도를 바꾸거나 없앨 때) */
+export function unwaive(book: HrBook, dept: Dept): HrBook {
+  const { [dept]: _was, ...rest } = book.budgetWaivers ?? {}
+  const { budgetWaivers: _old, ...others } = book
+  return Object.keys(rest).length === 0 ? others : { ...others, budgetWaivers: rest }
+}
+
+/** 확인 창의 질문 */
+export const budgetQuestion = (o: Overrun, what: string): string =>
+  `${overrunText(o)}입니다. ${DEPT_INFO[o.dept].ko}에 새 일(${what || '설명 없음'})을 맡길까요?`
+
+/** 맡기지 않을 때 일을 띄운 쪽(모델)이 받는 글 */
+export const budgetDenyText = (o: Overrun): string =>
+  `agent-office: ${overrunText(o)}이라 대표가 ${DEPT_INFO[o.dept].ko}에 새 일을 맡기지 않았습니다. 이 일은 서브에이전트 없이 하거나, 대표에게 예산을 물어보세요.`

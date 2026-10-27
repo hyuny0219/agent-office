@@ -1,14 +1,14 @@
-// 사무실 메뉴 화면. 사무실 패널과 따로 여는 패널로, 위의 1~5 메뉴를 고르면 그 내용을 패널 안에 표(마크다운)로 보인다.
+// 사무실 메뉴 화면. 사무실 패널과 따로 여는 패널로, 위의 1~7 메뉴를 고르면 그 내용을 패널 안에 표(마크다운)로 보인다.
 // 무엇을 보고 있는지는 상태(menuView)에 둔다. 여기에는 메뉴 목록과 화면별 내용(블록)만 둔다.
 import type { EngineInterface } from 'claude-code'
 
 import type { BossRating, Dept, HrBook, JobRecord } from '../types'
-import { DEPT_INFO, DEPTS, rate } from '../core/hr'
+import { DEPT_INFO, DEPTS, deptFor, isTypeKey, MAX_DEPT_MAP, rate, setDept } from '../core/hr'
 import { rankChangeText } from '../core/answer'
 import { budgetBlocks } from '../core/budget'
 import { adopt, dropRule, playbookBlocks, proposalsOf, roomOf } from '../core/playbook'
 import type { Proposal } from '../core/playbook'
-import { cardBlocks, findEmployee, reportBlocks, rosterBlocks } from '../core/report'
+import { archiveBlocks, cardBlocks, deptMapBlocks, findEmployee, knownTypesOf, reportBlocks, rosterBlocks } from '../core/report'
 import type { Block } from '../core/table'
 import { agentsOf, saveHr } from './store'
 import { APPROVER_MODEL } from '../core/approval'
@@ -16,7 +16,7 @@ import { APPROVER_MODEL } from '../core/approval'
 export const MENU_PANE = 'agent-office-menu'
 export const MENU_TITLE = '사무실 메뉴'
 
-/** 메뉴: 단축키 1~5. view는 상태에 두는 화면 이름 */
+/** 메뉴: 단축키 1~7. view는 상태에 두는 화면 이름 */
 export const MENU = [
   { key: 'menu-hr', hotkey: '1', label: '인사 명부', view: 'hr' },
   { key: 'menu-today', hotkey: '2', label: '일간 보고', view: 'today' },
@@ -24,6 +24,7 @@ export const MENU = [
   { key: 'menu-budget', hotkey: '4', label: '예산', view: 'budget' },
   { key: 'menu-settings', hotkey: '5', label: '설정', view: 'settings' },
   { key: 'menu-playbook', hotkey: '6', label: '지침', view: 'playbook' },
+  { key: 'menu-archive', hotkey: '7', label: '기록', view: 'archive' },
 ] as const
 
 /** 인사카드 화면의 이름: card:<별칭> */
@@ -80,6 +81,7 @@ export async function viewBlocks($: EngineInterface, b: HrBook, view: string): P
     return blocks.length > 0 ? blocks : [{ t: 'title', text: '부서 예산' }, { t: 'line', text: '부서 예산이 없습니다. 정하려면 /office budget <부서> <달러> (예: /office budget 개발팀 5), 없애려면 /office budget <부서> off' }]
   }
   if (view === 'playbook') return playbookBlocks(b, now)
+  if (view === 'archive') return archiveBlocks(b)
   if (view === 'settings') return [{ t: 'title', text: '설정' }, { t: 'line', text: '누르면 바로 켜고 끕니다.' }]
   return rosterBlocks(b, now)
 }
@@ -112,3 +114,29 @@ export async function pressPlaybook($: EngineInterface, key: string) {
     $.ui.invalidate('ui.render')
   }
 }
+
+/** 설정 화면의 부서 배치 버튼: 종류마다 누르면 다음 부서로 옮긴다 */
+export const deptButtons = (b: HrBook): { key: string; type: string; label: string }[] =>
+  // 열쇠로 쓸 수 없는 종류(상속 이름 등)는 버튼을 만들지 않는다(눌러도 바꿀 수 없다)
+  knownTypesOf(b).filter(isTypeKey).map(k => ({ key: `dept-${encodeURIComponent(k)}`, type: k, label: `${k}: ${DEPT_INFO[deptFor(b, k)].ko}${b.deptMap?.[k] === undefined ? '' : ' (바꿈)'}` }))
+
+/** 다음 부서(마지막 다음은 처음) */
+export const nextDept = (d: Dept): Dept => DEPTS[(DEPTS.indexOf(d) + 1) % DEPTS.length] ?? d
+
+/** 부서 배치 버튼을 누름: 저장한 값 위에서 다음 부서로 옮기고 다시 그린다 */
+export async function pressDept($: EngineInterface, type: string) {
+  try {
+    let isSame = false
+    await saveHr($, b => {
+      const next = setDept(b, type, nextDept(deptFor(b, type)))
+      isSame = next === b
+      return next
+    })
+    if (isSame) $.ui.toast(`바꾼 배치가 ${MAX_DEPT_MAP}가지로 찼습니다. 먼저 /office dept <종류> reset으로 되돌리세요.`)
+  } finally {
+    $.ui.invalidate('ui.render')
+  }
+}
+
+/** 설정 화면 아래에 붙는 부서 배치 표(버튼 위 설명) */
+export const deptNote = (b: HrBook): Block[] => deptMapBlocks(b)

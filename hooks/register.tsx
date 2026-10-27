@@ -8,11 +8,11 @@ import { checkRunOf, errLineOf, messageOf, oopsOf, orderOf, replyOf, selfTalkOf 
 import { enroll, errorLessonKey, markHit } from '../core/trial'
 import { activityOf, layoutOf } from '../core/scene'
 import { answer, COMMAND } from './commands'
-import { awaitApproval, checkBudget, checkFollowUp, checkRework, EDIT_TOOLS, fileOf, isCheckCommand, papers, reorganize, reviewPlan, syncStatus, takeNotes, watch } from './flow'
+import { awaitApproval, checkBudget, checkFollowUp, gateSpawn, checkRework, EDIT_TOOLS, fileOf, isCheckCommand, papers, reorganize, reviewPlan, syncStatus, takeNotes, watch } from './flow'
 import { usageOf } from '../core/tokens'
 import { playbookLines } from '../core/playbook'
 import { briefNotes } from '../core/notes'
-import { cardView, flip, MENU, MENU_PANE, MENU_TITLE, nickOfView, playbookButtons, pressPlaybook, ratableOf, rateJob, TOGGLES, viewBlocks } from './menu'
+import { cardView, deptButtons, deptNote, flip, MENU, MENU_PANE, MENU_TITLE, nickOfView, playbookButtons, pressDept, pressPlaybook, ratableOf, rateJob, TOGGLES, viewBlocks } from './menu'
 import { mdOf } from '../core/table'
 import { isShell } from '../core/watch'
 import { admit, agentsOf, chargeAgent, readMenuView, setMenuView, ensure, fresh, hold, hrOf, MEET_MS, meet, nickOfId, patch, readFeed, release, save, saveHr, speak, staff, watchAgents } from './store'
@@ -41,7 +41,7 @@ export const register: Register = (on, options) => {
   on('command.run', { command: 'office' }, async ($, e) => {
     if (e.args.trim().toLowerCase() === 'menu') {
       const opened = await $.ui.open({ id: MENU_PANE, title: MENU_TITLE, focus: true, closeOnEscape: true })
-      return { text: opened.isPlaced ? '사무실 메뉴를 열었습니다. 1 인사 명부 · 2 일간 보고 · 3 주간 보고 · 4 예산 · 5 설정' : '사무실 메뉴가 아직 그려지지 않았습니다(창이 좁으면 넓혀 주세요).' }
+      return { text: opened.isPlaced ? '사무실 메뉴를 열었습니다. 1 인사 명부 · 2 일간 보고 · 3 주간 보고 · 4 예산 · 5 설정 · 6 지침 · 7 기록' : '사무실 메뉴가 아직 그려지지 않았습니다(창이 좁으면 넓혀 주세요).' }
     }
     const text = await answer($, e.args)
     // 설정을 바꾼 명령이면 패널의 켜짐·꺼짐 표시를 다시 그린다(설정은 상태가 아니라 저장소에 있다)
@@ -55,6 +55,9 @@ export const register: Register = (on, options) => {
 
   // 새 에이전트: 부서 적임자에게 맡기고(업무 지시 끝에 인사 메모), 띄운 쪽과 회의실에서 지시를 주고받은 뒤 일하러 간다
   on('agent.spawn', async ($, e, next) => {
+    // 예산을 넘은 부서면 맡기기 전에 대표에게 묻는다(맡기지 않으면 아무도 뽑지 않는다)
+    const denied = await gateSpawn($, e.subagentType, e.description)
+    if (denied !== null) return { deny: denied }
     const { employee, why } = await staff($, e.subagentType, e.description)
     // 사무실에 들어올 때까지 붙잡아 둔다(그 사이 조직 개편이 고른 직원을 내보내지 않도록)
     hold(employee.nick)
@@ -303,6 +306,13 @@ export const register: Register = (on, options) => {
                 <Text dimColor>{t.note}</Text>
               </Box>
             ))}
+            <Box marginTop={1} flexDirection="column">
+              <Markdown key="dept-map" text={mdOf(deptNote(b))} />
+              {deptButtons(b).length > 0 && <Text dimColor>누르면 다음 부서로 옮깁니다:</Text>}
+              <Box columnGap={2} flexWrap="wrap">
+                {deptButtons(b).map(x => <Button key={x.key} plain onPress={() => pressDept($, x.type).catch(() => undefined)}>{x.label}</Button>)}
+              </Box>
+            </Box>
           </Box>
         )}
         {view === 'playbook' && buttons.length > 0 && (

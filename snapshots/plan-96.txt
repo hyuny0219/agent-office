@@ -1,0 +1,27 @@
+   AGENT OFFICE  working 3  meeting 2  done 0
+  CEO               MEETING                 LIBRARY                 SERVER       WC
+
+                                             OWL
+
+                      BOSS  BEAR                                   HAWK
+
+
+
+
+
+
+
+  OFFICE                                                             PANTRY
+
+    DEV                 RESEARCH            QA
+
+
+
+
+
+
+
+
+
+
+

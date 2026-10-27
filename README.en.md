@@ -40,7 +40,9 @@ In the desktop app, where `/plugin` does not run: click + next to the prompt box
 | Command | What it does |
 | --- | --- |
 | `/office` | Open the office floor plan pane |
-| `/office menu` | Open the office menu pane: roster, daily/weekly reports, budget and settings as tables |
+| `/office menu` | Open the office menu pane: roster, daily/weekly reports, budget, settings, playbooks and monthly records as tables |
+| `/office export [json\|csv] [<folder>]` | Export the HR records: `json` (default) as a whole, `csv` as two files (job log and monthly summary, Excel-friendly). Without a folder it writes to `agent-office-export/` in the session folder |
+| `/office dept [<type> <dept>\|<type> reset]` | Show, change or reset which department an agent type goes to (e.g. `/office dept writer qa`) |
 | `/office playbook [<dept> adopt <n\|all>\|<dept> drop <n>]` | Department playbooks (agent improvement): see proposals built from repeated flaws, adopt or drop them, compare results before and after |
 | `/office rate <nick> good\|bad\|clear` | Rate (or clear the rating of) that employee's most recent finished job as the boss (good +3 · bad -3) |
 | `/office hr` | HR records: staff, rank, salary, latest review, done/failed, tool errors, reworks and attendance alerts by department, plus each department's repeated mistakes |
@@ -54,7 +56,7 @@ In the desktop app, where `/plugin` does not run: click + next to the prompt box
 
 The floor plan is drawn in pixels in the terminal (72 to 140 columns wide, 27 rows tall). The desktop app and VS Code show the list only.
 
-The office pane's `menu` button (hotkey `m`) or `/office menu` opens a separate office menu pane. Pick `1` roster · `2` daily report · `3` weekly report · `4` budget · `5` settings at the top and it is shown as tables inside that pane (`q` closes it). Pressing an employee's row in the office pane shows their personnel card in the menu pane, and the nick buttons under the roster open cards too (`0` back to the roster). The settings view turns approvals, reorganization, the HR memo and training-effect measurement on or off in place. Hotkeys work while that pane has focus.
+The office pane's `menu` button (hotkey `m`) or `/office menu` opens a separate office menu pane. Pick `1` roster · `2` daily report · `3` weekly report · `4` budget · `5` settings · `6` playbooks · `7` records at the top and it is shown as tables inside that pane (`q` closes it). Pressing an employee's row in the office pane shows their personnel card in the menu pane, and the nick buttons under the roster open cards too (`0` back to the roster). The settings view turns approvals, reorganization, the HR memo and training-effect measurement on or off in place, and its department buttons move an agent type to the next department. Hotkeys work while that pane has focus.
 
 ## The office
 
@@ -79,7 +81,7 @@ The office pane's `menu` button (hotkey `m`) or `/office menu` opens a separate 
 
 ## HR system
 
-- **Departments** come from the agent type: Dev, Research, QA, Planning, Docs and Ops.
+- **Departments** come from the agent type: Dev, Research, QA, Planning, Docs and Ops. Types not in the table go to Ops. Send your own agents elsewhere with `/office dept <type> <dept>` (or the buttons under menu `5`). The type is matched without its prefix (`oh-my-claudecode:writer` → `writer`); employees already hired stay in their department and new jobs go to the new one.
 - **Employees**: one nickname is one person. Records persist across sessions.
 - **Assignment**: when work comes in, the **best fit** among the department's free employees takes it; if nobody is free, the department hires. Fit is the average review, plus 3 per similar job done well (up to 3; similar means at least half the words of the task description overlap), minus 4 per similar job rejected, reworked or failed (up to 2), plus experience (up to 2). When there was a choice, the reason ("did 2 similar jobs well") is added to the HR memo and the order line in the messenger.
 - **Reviews** use real records only: done +10, failed −5 (killed −3), −1 per tool error or denial (at most −5), +3 for finishing with no errors after actually using tools → grades S, A, B, C, D.
@@ -156,7 +158,7 @@ Departures are announced with a toast and in the messenger (from HR), and stay i
 
 ### Reports
 
-`/office report` is built from the log of finished jobs (the latest 300). The mod doesn't know your time zone, so "today" means the last 24 hours and "week" the last 7 days. Labor cost is a playful number: each employee's current salary turned into an hourly rate (40 hours × 52 weeks) times the time the job took.
+`/office report` is built from the log of finished jobs (the latest 300; older jobs are folded into the monthly records below). The mod doesn't know your time zone, so "today" means the last 24 hours and "week" the last 7 days. Labor cost is a playful number: each employee's current salary turned into an hourly rate (40 hours × 52 weeks) times the time the job took.
 
 ### Token usage and cost
 
@@ -164,7 +166,24 @@ Every time an agent calls the model, the usage the engine reports (input, output
 
 ### Department budgets
 
-Set a daily spending limit in dollars per department, e.g. `/office budget dev 5`. The department's cost over the last 24 hours (finished jobs plus their approvals, plus what employees at work right now have spent) is checked, and going over is announced with a toast and in the messenger (from HR). Each department is announced at most once per 24 hours; setting a new limit allows a new notice. It only warns and never stops work. The status is in `/office budget` and the daily report (`/office report`), and the limits are listed in `/office hr`. Departments can be named `개발팀`, `개발` or `dev`. BOSS has no department, so its cost counts toward no budget.
+Set a daily spending limit in dollars per department, e.g. `/office budget dev 5`. The department's cost over the last 24 hours (finished jobs plus their approvals, plus what employees at work right now have spent) is checked, and going over is announced with a toast and in the messenger (from HR). Each department is announced at most once per 24 hours; setting a new limit allows a new notice.
+
+Before a new job goes to a department over its limit, a dialog asks first:
+- **Keep assigning**: assign this job and don't ask again for that department for 24 hours.
+- **Just this once**: assign this job and ask again next time.
+- **Don't assign**: the subagent is not started and the caller (the model) is told it was held back for budget. Nobody is hired.
+
+If the dialog is dismissed or there is no one to ask (`claude -p`), the job is not assigned. Several jobs for one department at once get one question and share the answer. Setting or removing a limit clears "keep assigning". The status is in `/office budget` and the daily report (`/office report`), and the limits are listed in `/office hr`. Departments can be named `개발팀`, `개발` or `dev`. BOSS has no department, so its cost counts toward no budget.
+
+### Records archive and export
+
+The job log keeps the latest 300 jobs; older jobs pushed out of it are not deleted but folded into **monthly summaries** (count, done, failed, average score, cost, rework, rejections, boss ratings, plus per-department count, average and cost; up to 10 years). Menu `7` shows the latest 12 months. Months follow the local time a job ended.
+
+`/office export` writes the HR records to files, since they live on one machine only.
+- `json` (default): everything (employees, job log, monthly summaries, playbooks, settings).
+- `csv`: the job log (`…-jobs.csv`) and monthly summaries (`…-months.csv`), with a BOM so Excel reads Korean, and agent-written cells starting with `=`, `+`, `-` or `@` prefixed with `'` so they are not read as formulas.
+
+Without a folder it writes to `agent-office-export/` in the session folder; add it to `.gitignore` inside a repository.
 
 ### Measuring the training effect
 
@@ -186,11 +205,15 @@ The agent-office entry in `/config`:
 
 ```
 claude plugin validate .
-claude plugin test .
+claude plugin test .            # tests/*.test.ts(x): pure functions per core module, and hooks in the engine-mocking harness
+bun test omp/                   # the omp edition's screen lines (above-editor panel, sidebar, menu)
+bun scripts/snap.ts --check     # whether the screen snapshots changed (if intended, rewrite them with bun scripts/snap.ts)
 claude --plugin-dir .
 ```
 
-`hooks/register.tsx` only wires engine events; the work is split up: `store.ts` (state and persistence), `flow.ts` (sync, reviews, approvals, attendance, reorganization), `view.ts` (pane rows, painting the floor plan), `commands.ts` (`/office` text answers), `menu.ts` (the menu pane's items and per-view content). Decisions live in engine-agnostic pure modules under `core/` (they never see Claude Code's `$`, so another agent engine can reuse them): `table.ts` (aligned tables and document blocks rendered as text or Markdown), `notes.ts` (personal work notes), `hr.ts` (HR), `org.ts` (assignment, approval accuracy, reorganization), `approval.ts` (approvals), `speech.ts` (chatter), `report.ts` (reports, roster, personnel cards), `tokens.ts` (token usage and cost), `budget.ts` (department budgets), `trial.ts` (training effect), `watch.ts` (attendance), `scene.ts` (floor plan).
+Tests live in `tests/`, one file per module (`hr`, `approval`, `archive`… for pure functions; `spawn`, `approval-flow`, `panel`, `ledger`, `admin` for hooks), with shared helpers in `tests/kit.ts`. `snapshots/` holds what both editions' screen-line builders draw for a fixed office, as text (Claude Code pane rows at 80 and 120 columns, the floor plan at 96, every menu view, the omp panel at 80 and 140, the sidebar at 48 and at 74 with the floor plan), so a commit that changes the screen shows the real shape change in the snapshot diff.
+
+`hooks/register.tsx` only wires engine events; the work is split up: `store.ts` (state and persistence), `flow.ts` (sync, reviews, approvals, attendance, reorganization), `view.ts` (pane rows, painting the floor plan), `commands.ts` (`/office` text answers), `menu.ts` (the menu pane's items and per-view content). Decisions live in engine-agnostic pure modules under `core/` (they never see Claude Code's `$`, so another agent engine can reuse them): `table.ts` (aligned tables and document blocks rendered as text or Markdown), `notes.ts` (personal work notes), `hr.ts` (HR), `org.ts` (assignment, approval accuracy, reorganization), `approval.ts` (approvals), `speech.ts` (chatter), `report.ts` (reports, roster, personnel cards, monthly records, department table), `archive.ts` (monthly summaries, export), `tokens.ts` (token usage and cost), `budget.ts` (department budgets and the over-budget question), `trial.ts` (training effect), `watch.ts` (attendance), `scene.ts` (floor plan).
 
 The README screenshots (`docs/office.png`, `docs/office.gif`) are made by running `core/scene.ts` itself (needs Pillow):
 

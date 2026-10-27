@@ -3,3 +3,4 @@
 .claude-plugin/types/
 .mcpb-cache/
 dist/
+agent-office-export/

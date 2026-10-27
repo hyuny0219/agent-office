@@ -1,0 +1,41 @@
+╭─────────────────────────────────────────────────────────────────────────
+│ 에이전트 사무실 (/office side 닫기 · /office menu)
+│    AGENT OFFICE  working 3  meeting 2  done 0
+│   CEO            MEETING           LIBRARY       SERVER     WC
+│
+│                                     OWL
+│
+│                    BOSS  BEAR                   HAWK
+│
+│
+│
+│
+│
+│
+│
+│   OFFICE                                         PANTRY
+│
+│     DEV                 RESEARCH
+│
+│
+│
+│
+│
+│     QA
+│
+│
+│
+│
+│
+│ BOSS 보스 대표 · 회의실: 곰과 대화 · Opus 5.5 · 토큰 172k($1.20) · -
+│ BEAR 대리·팀장 (개발팀) · 회의실: 보스와 대화 · 결제 화면 고치기
+│ OWL 사원·팀장 (조사팀) · 자료실 Grep · Haiku 5.5 · 로그 형식 조사
+│ HAWK 매 사원·팀장 (품질팀) · 서버실 Bash · Sonnet 5.5 · 테스트 돌리고 리
+│
+│ 사내 메신저
+│ 6분 전 BOSS → BEAR (지시): 결제 화면 고치기
+│ 5분 전 OWL (혼잣말): grep "level=" logs/
+│ 3분 전 HAWK: Bash: npm test 실패 (2 failed)
+│ 2분 전 품질팀장 HAWK (결재): BEAR "로그인 버그 고치기" 승인
+│ 1분 전 인사팀 (발령): 개발팀 하루 예산 초과: 최근 24시간 $2.40 / 예산 $2
+╰─────────────────────────────────────────────────────────────────────────

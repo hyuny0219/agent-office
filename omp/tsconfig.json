@@ -1,11 +1,13 @@
 {
   // omp판 타입 검사: oh-my-pi를 bun으로 전역 설치한 곳을 가리킨다(다르면 paths·typeRoots를 고친다).
-  // 실행: npx -p typescript tsc -p omp/tsconfig.json
+  // 실행: npx -p typescript tsc -p omp/tsconfig.json · 화면 테스트: bun test omp/ · 화면 스냅샷: bun scripts/snap.ts [--check]
   "compilerOptions": {
     "target": "es2023", "lib": ["es2023"], "types": ["node"], "typeRoots": ["${configDir}/../../../../.bun/install/global/node_modules/@types"],
     "module": "esnext", "moduleResolution": "bundler", "allowImportingTsExtensions": true,
     "strict": true, "noUncheckedIndexedAccess": true, "noUnusedLocals": true, "noEmit": true, "skipLibCheck": true,
     "paths": { "@oh-my-pi/*": ["${configDir}/../../../../.bun/install/global/node_modules/@oh-my-pi/*"] }
   },
-  "include": ["${configDir}", "${configDir}/../core", "${configDir}/../types"]
+  "include": ["${configDir}", "${configDir}/../core", "${configDir}/../types"],
+  // bun test로 도는 화면 테스트(bun:test 타입은 omp 설치에 없다)
+  "exclude": ["${configDir}/**/*.spec.ts"]
 }
