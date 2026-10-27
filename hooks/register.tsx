@@ -10,6 +10,7 @@ import { activityOf, layoutOf } from './scene'
 import { answer, COMMAND } from './commands'
 import { awaitApproval, checkBudget, checkFollowUp, checkRework, EDIT_TOOLS, fileOf, isCheckCommand, papers, reorganize, reviewPlan, syncStatus, takeNotes, watch } from './flow'
 import { usageOf } from './tokens'
+import { briefNotes } from './notes'
 import { cardView, flip, MENU, MENU_PANE, MENU_TITLE, nickOfView, ratableOf, rateJob, TOGGLES, viewBlocks } from './menu'
 import { mdOf } from './table'
 import { isShell } from './watch'
@@ -71,7 +72,9 @@ export const register: Register = (on, options) => {
         const arm = (enrolled as ReturnType<typeof enroll>)?.arm
         if (arm !== undefined) trial = { arm, keys, hits: [] }
         // 비교군은 실수 목록만 뺀다(나머지 메모는 같게 두어 실수 목록의 효과만 본다)
-        brief = briefOf(await hrOf($), employee, at, arm === 'control' ? [] : lessons, why)
+        // 개인 업무 노트: 비교군에는 흠·오류를 빼고 붙인다(실수 목록 역할을 하지 않도록, 실수 목록의 효과만 잰다)
+        const book = await hrOf($)
+        brief = briefOf(book, employee, at, arm === 'control' ? [] : lessons, why, briefNotes(book, book.employees.find(x => x.nick === employee.nick) ?? employee, e.description, arm === 'control'))
       }
       const spawned = await next(brief === null ? e : { ...e, prompt: `${e.prompt}\n\n${brief}` })
       if (spawned.deny !== undefined || spawned.agentId === undefined) return spawned

@@ -104,7 +104,15 @@ export type Employee = {
   tokens?: TokenUse
   /** 토큰을 센 업무 수(한 건 평균을 낼 때: 토큰을 세기 전에 끝낸 일은 빼고) */
   tokenJobs?: number
+  /** 개인 업무 노트(최근 것이 앞): 다시 일을 맡길 때 비슷한 일의 노트를 업무 지시에 붙인다 */
+  notes?: WorkNote[]
 }
+
+/**
+ * 끝낸 일 한 건의 노트: 그 직원의 몇 번째 일, 업무 설명(기록이 잘려도 남도록), 보고 요약, 고친 파일 이름, 난 오류, 반려 의견(한 줄씩, 비밀은 가림).
+ * 업무 지시에는 구조화된 칸(설명·흠·파일 이름·오류 난 도구)만 붙이고, 자유 글(요약·오류 문구·반려 의견)은 인사카드에만 보인다
+ */
+export type WorkNote = { job: number; description?: string; summary: string; files: string[]; errors: string[]; rejectNotes?: string[] }
 
 /** 부서가 반복한 도구 오류(같은 도구·같은 문구끼리 센다) */
 export type Lesson = {

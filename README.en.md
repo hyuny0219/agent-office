@@ -113,6 +113,10 @@ The repeated mistakes are subagents' tool error messages, grouped and counted by
 Turn it off with `/office hr off`. Reviews and salaries keep being recorded either way.
 
 
+### Personal work notes
+
+Each employee keeps notes on their last 5 finished jobs: a summary of the report (its first meaningful line, secrets masked), file names changed, the first line of errors hit, and the approver's comments if it was rejected. When that employee is given a new job, up to three notes go into the HR memo of the brief: first those for similar jobs, then ones with flaws (failed, failing tests, rework, rejection, a bad boss rating), then the most recent. The brief only gets fields the office measured (job description, flaws, file names, tools that errored), never free text like report summaries, error messages or rejection comments, so past text can't read as instructions to the next employee or keep riding along across sessions. The training-effect control group gets them without flaws or errors. Turning the HR memo off (`/office hr off`) leaves them out. The full notes (free text in 「」) are shown under `work notes` on the personnel card.
+
 ### Boss ratings
 
 You (the boss) can rate a finished job `good` (+3) or `bad` (-3): with the buttons next to each recent job on a personnel card in the menu pane (press the same one again to clear it), or with `/office rate <nick> good|bad|clear` for the most recent job. Changing a rating adjusts that job's score, the employee's experience and average by the difference; clearing it restores them. As the most direct signal of quality, ratings feed other systems too:
@@ -177,7 +181,7 @@ claude plugin test .
 claude --plugin-dir .
 ```
 
-`hooks/register.tsx` only wires engine events; the work is split up: `store.ts` (state and persistence), `flow.ts` (sync, reviews, approvals, attendance, reorganization), `view.ts` (pane rows, painting the floor plan), `commands.ts` (`/office` text answers), `menu.ts` (the menu pane's items and per-view content), `table.ts` (aligned tables and document blocks rendered as text or Markdown). Decisions live in pure modules: `hr.ts` (HR), `org.ts` (assignment, approval accuracy, reorganization), `approval.ts` (approvals), `speech.ts` (chatter), `report.ts` (reports, roster, personnel cards), `tokens.ts` (token usage and cost), `budget.ts` (department budgets), `trial.ts` (training effect), `watch.ts` (attendance), `scene.ts` (floor plan).
+`hooks/register.tsx` only wires engine events; the work is split up: `store.ts` (state and persistence), `flow.ts` (sync, reviews, approvals, attendance, reorganization), `view.ts` (pane rows, painting the floor plan), `commands.ts` (`/office` text answers), `menu.ts` (the menu pane's items and per-view content), `notes.ts` (personal work notes), `table.ts` (aligned tables and document blocks rendered as text or Markdown). Decisions live in pure modules: `hr.ts` (HR), `org.ts` (assignment, approval accuracy, reorganization), `approval.ts` (approvals), `speech.ts` (chatter), `report.ts` (reports, roster, personnel cards), `tokens.ts` (token usage and cost), `budget.ts` (department budgets), `trial.ts` (training effect), `watch.ts` (attendance), `scene.ts` (floor plan).
 
 The README screenshots (`docs/office.png`, `docs/office.gif`) are made by running `hooks/scene.ts` itself (needs Pillow):
 

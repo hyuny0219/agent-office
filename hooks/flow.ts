@@ -13,6 +13,7 @@ import { settle } from './trial'
 import { callKeyOf, isCheckCommand, ERROR_STREAK, errorKeyOf, errorToast, isAlarm, isOvertime, isPolling, nudgeOf, REPEAT_STREAK, repeatToast, stepOf } from './watch'
 import { shortType } from './scene'
 import { addTokens, chargeReview, usageOf } from './tokens'
+import { addNote, markRejected, noteOf } from './notes'
 import { noticed, overrunsOf, overrunText } from './budget'
 import type { Overrun } from './budget'
 import { admit, agentsOf, fresh, hold, hrOf, keptNow, MEET_MS, meet, nickOfId, patch, release, save, saveHr, speak } from './store'
@@ -94,8 +95,10 @@ async function review1($: EngineInterface, a: OfficeAgent, isDone: boolean, isKi
       isCheckFailed: isDone && got.isCheckFailed === true, isReworked: false, alarms: got.alarms ?? 0, files: (got.files ?? []).length,
       ...(employee === undefined ? {} : { salary: salaryOf(result.book, employee) }), ...(got.tokens === undefined ? {} : { tokens: got.tokens }),
     })
+    // 개인 업무 노트: 보고 요약·고친 파일·난 오류(다음에 이 사람에게 맡길 때 붙인다)
+    const noted = employee === undefined ? logged : addNote(logged, a.nick, noteOf(job, got.description, papers.get(a.id)?.report ?? '', got.files ?? [], got.errLines ?? []))
     // 인계 시각은 기록의 끝난 시각과 같게(후속 수정·재작업을 같은 창으로 잰다)
-    return isDone ? handOff(logged, { agentId: a.id, nick: a.nick, files: got.files ?? [], endedAt: got.endedAt ?? now, job }) : logged
+    return isDone ? handOff(noted, { agentId: a.id, nick: a.nick, files: got.files ?? [], endedAt: got.endedAt ?? now, job }) : noted
   })
   const r = result as ReturnType<typeof review> | null
   if (r === null) return false
@@ -194,7 +197,8 @@ async function approve($: EngineInterface, nick: string, job: number, xpBefore: 
   let moved: ReturnType<typeof decide> | null = null
   await saveHr($, x => {
     moved = decide(chargeReview(x, nick, job, spent), nick, job, d.verdict, penalty, route.approver)
-    return moved.book
+    // 반려 의견은 그 일의 노트에도 남긴다
+    return d.verdict === 'rejected' ? markRejected(moved.book, nick, job, d.notes) : moved.book
   })
   const m = moved as ReturnType<typeof decide> | null
   $.ui.toast(`${decisionToast(e, route, f.description, d, penalty)}${m === null ? '' : movedText(m)}`)

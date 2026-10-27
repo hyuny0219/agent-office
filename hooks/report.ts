@@ -8,6 +8,7 @@ import { accuracyBlocks } from './org'
 import { koNick } from './scene'
 import { costText, sumTokens, tokenDetail, tokenText, totalOf, usdText, useText } from './tokens'
 import { budgetBlocks } from './budget'
+import { noteLine } from './notes'
 import { textOf } from './table'
 import type { Block } from './table'
 
@@ -194,6 +195,11 @@ export function cardBlocks(book: HrBook, e: Employee | Retiree, now: number): Bl
         agoText(r.endedAt, now), r.description || '(설명 없음)', OUTCOME_KO[r.outcome], `${gradeOf(r.score)}(${signed(r.score)})`, BOSS_KO[r.bossRating ?? 'none'], durationText(r.endedAt - r.startedAt),
         `${r.errors}`, r.tokens !== undefined && totalOf(r.tokens) > 0 ? useText(r.tokens) : '-', flawsOf(r).filter(f => f !== OUTCOME_KO[r.outcome] && f !== '대표 아쉬움').join(' · '),
       ]) })
+  }
+  const notes = e.notes ?? []
+  if (notes.length > 0) {
+    out.push({ t: 'gap' }, { t: 'section', text: '업무 노트(다시 맡길 때 비슷한 일의 노트가 업무 지시에 붙음)' },
+      ...notes.map(n => ({ t: 'bullet', text: noteLine(n, book.log.find(r => r.nick === e.nick && r.job === n.job)) } as const)))
   }
   const lessons = lessonsFor(book, e.dept, now)
   if (lessons.length > 0) {
