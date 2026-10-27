@@ -8,6 +8,8 @@ import type { Period } from './report'
 import { IDLE_JOBS, IDLE_MS, RETIRE_AVG, RETIRE_JOBS } from './org'
 import { CONTROL_EVERY } from './trial'
 import { budgetLines, deptNamed, dollarsOf } from './budget'
+import { adopt, dropRule, MAX_RULES, playbookBlocks, proposalsOf, roomOf } from './playbook'
+import { textOf } from './table'
 import { usdText } from './tokens'
 import { BOSS_RATE_POINTS, DEPT_INFO, DEPTS, rate } from './hr'
 
@@ -24,8 +26,8 @@ const withRo = (word: string): string => {
 
 export const COMMAND = {
   name: 'office',
-  description: '에이전트 사무실 평면도 보기. menu: 메뉴 화면(인사 명부·보고서·예산·설정을 표로), rate <별칭> good|bad|clear: 최근 끝낸 일에 대표 평가, budget [<부서> <달러>|<부서> off]: 부서별 하루 비용 한도, approval on|off: 보고·계획 결재 켜고 끄기, reorg on|off: 조직 개편(권고사직·계약 종료) 켜고 끄기, report [today|week]: 일간·주간 보고, hr: 인사 기록(부서·직급·연봉·평가), hr <별칭>: 인사카드, hr on|off: 업무 지시 인사 메모 켜고 끄기, hr ab on|off: 교육 효과 측정(비교군) 켜고 끄기',
-  argumentHint: '[menu | rate <별칭> good|bad|clear | budget [<부서> <달러>|<부서> off] | approval on|off | reorg on|off | report [today|week] | hr [<별칭>|on|off|ab on|off]]',
+  description: '에이전트 사무실 평면도 보기. menu: 메뉴 화면(인사 명부·보고서·예산·설정·지침을 표로), playbook [<부서> adopt <n|all>|<부서> drop <n>]: 부서 지침(평가로 만든 개선안을 채택), rate <별칭> good|bad|clear: 최근 끝낸 일에 대표 평가, budget [<부서> <달러>|<부서> off]: 부서별 하루 비용 한도, approval on|off: 보고·계획 결재 켜고 끄기, reorg on|off: 조직 개편(권고사직·계약 종료) 켜고 끄기, report [today|week]: 일간·주간 보고, hr: 인사 기록(부서·직급·연봉·평가), hr <별칭>: 인사카드, hr on|off: 업무 지시 인사 메모 켜고 끄기, hr ab on|off: 교육 효과 측정(비교군) 켜고 끄기',
+  argumentHint: '[menu | playbook [<부서> adopt <n|all>|<부서> drop <n>] | rate <별칭> good|bad|clear | budget [<부서> <달러>|<부서> off] | approval on|off | reorg on|off | report [today|week] | hr [<별칭>|on|off|ab on|off]]',
 }
 
 /** 명령이 인사 기록과 사무실을 읽고 쓰는 길 */
@@ -95,6 +97,31 @@ export async function answerWith(desk: Desk, args: string): Promise<string | nul
     })
     const said = want === 'clear' ? `${who.nick} "${last.description}"의 대표 평가를 거둡니다.` : `${who.nick} "${last.description}"에 대표 평가 ${want === 'good' ? `좋음(+${BOSS_RATE_POINTS})` : `아쉬움(-${BOSS_RATE_POINTS})`}을 줍니다.`
     return `${said}${rankChangeText(moved)}`
+  }
+  if (sub === 'playbook') {
+    const b = await desk.book()
+    if (arg === undefined || arg === '') return textOf(playbookBlocks(b, await desk.now()))
+    const dept = deptNamed(arg)
+    if (dept === null) return `${arg}라는 부서가 없습니다. 부서: ${DEPTS.map(d => DEPT_INFO[d].ko).join(', ')}`
+    const [, , action, which] = args.trim().split(/\s+/)
+    if (action === 'adopt') {
+      const at = await desk.now()
+      const props = proposalsOf(b, dept, at)
+      const picked = which === 'all' ? props : props.filter((_, i) => String(i + 1) === which)
+      if (picked.length === 0) return `채택할 후보가 없습니다. /office playbook으로 ${DEPT_INFO[dept].ko} 후보 번호를 보세요.`
+      const room = roomOf(b, dept)
+      if (room < picked.length) return `${DEPT_INFO[dept].ko} 지침은 ${MAX_RULES}개까지입니다(남은 자리 ${Math.max(0, room)}). 먼저 /office playbook ${DEPT_INFO[dept].ko} drop <번호>로 빼세요.`
+      await desk.save(x => adopt(x, dept, picked, at))
+      return `${DEPT_INFO[dept].ko} 지침에 ${picked.length}개를 더합니다. 지금부터 그 부서 업무 지시에 붙고, 적용 전 성적(최근 업무)과 비교합니다:\n${picked.map(p => `- ${p.text}`).join('\n')}`
+    }
+    if (action === 'drop') {
+      const n = Number(which)
+      const rule = b.playbooks?.[dept]?.rules[n - 1]
+      if (rule === undefined) return `${DEPT_INFO[dept].ko}에 ${which ?? ''}번 지침이 없습니다.`
+      await desk.save(x => dropRule(x, dept, n))
+      return `${DEPT_INFO[dept].ko} 지침에서 뺍니다: ${rule.text}`
+    }
+    return '쓰는 법: /office playbook [<부서> adopt <후보 번호|all> | <부서> drop <지침 번호>]'
   }
   if (sub === 'report') {
     const want = arg?.toLowerCase()

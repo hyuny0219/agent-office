@@ -41,6 +41,7 @@ In the desktop app, where `/plugin` does not run: click + next to the prompt box
 | --- | --- |
 | `/office` | Open the office floor plan pane |
 | `/office menu` | Open the office menu pane: roster, daily/weekly reports, budget and settings as tables |
+| `/office playbook [<dept> adopt <n\|all>\|<dept> drop <n>]` | Department playbooks (agent improvement): see proposals built from repeated flaws, adopt or drop them, compare results before and after |
 | `/office rate <nick> good\|bad\|clear` | Rate (or clear the rating of) that employee's most recent finished job as the boss (good +3 · bad -3) |
 | `/office hr` | HR records: staff, rank, salary, latest review, done/failed, tool errors, reworks and attendance alerts by department, plus each department's repeated mistakes |
 | `/office hr <nick>` | One employee's personnel card: rank and experience to the next rank, salary breakdown, record, token total, last 5 jobs, the department's repeated mistakes (`bear` or the Korean name both work, former employees too) |
@@ -116,6 +117,10 @@ Review criteria: finish the task, keep tool errors down, don't finish with a fai
 The repeated mistakes are subagents' tool error messages, grouped and counted by department (paths and numbers removed). Only those seen at least twice are added, most recent first, three at most. Mistakes not seen again for two weeks are left out.
 Turn it off with `/office hr off`. Reviews and salaries keep being recorded either way.
 
+
+### Department playbooks (agent improvement)
+
+Review results feed back into how agents work. For each department, once 5+ jobs have piled up, the last 20 job records are checked against thresholds and a playbook rule is proposed for each flaw that crosses one: finished with failing tests/builds 20%+, reworked by BOSS 20%+, rejected in approval 25%+, rated bad by the boss 20%+, failed or killed 20%+, plus mistakes repeated more than three times (that have a known fix). Proposals are rule-based (no model call) and shown with their evidence. Only rules the boss adopts go into that department's HR memo as `<dept> playbook (approved by the boss)` (up to 8 per department), and the department's stats at adoption are kept to compare with jobs finished afterwards (average score, failing-test finishes, rework, rejections, bad ratings). See and choose them with `/office playbook` and `adopt`/`drop`, or with the buttons in menu view `6`. Claude Code's built-in agents have no definition file to edit, so rules ride along in the brief instead, which works the same in both editions (Claude Code and oh-my-pi).
 
 ### Personal work notes
 

@@ -19,6 +19,7 @@ import { feedRowsOf, rowsOf } from '../core/rows'
 import { budgetBlocks, noticed, overrunsOf, overrunText } from '../core/budget'
 import { cardBlocks, findEmployee, reportBlocks, rosterBlocks } from '../core/report'
 import { mdOf, textOf, widthOf } from '../core/table'
+import { playbookBlocks } from '../core/playbook'
 import type { Block } from '../core/table'
 import { ansiLines } from './ansi'
 import { agents, changed, feedOf, hr, onChange, patch, saveHr, say, takeLoadWarning, trim } from './store'
@@ -265,6 +266,7 @@ const MENU = [
   { key: '3', label: '주간 보고', view: 'week' },
   { key: '4', label: '예산', view: 'budget' },
   { key: '5', label: '설정', view: 'settings' },
+  { key: '6', label: '지침', view: 'playbook' },
 ] as const
 const TOGGLES = [
   { key: 'a', label: '결재', isOn: (b: HrBook) => b.isApproving, flip: (b: HrBook): HrBook => ({ ...b, isApproving: !b.isApproving }) },
@@ -285,6 +287,7 @@ function viewBlocks(view: string): Block[] {
     const blocks = budgetBlocks(b, [...agents.values()], t)
     return blocks.length > 0 ? blocks : [{ t: 'title', text: '부서 예산' }, { t: 'line', text: '부서 예산이 없습니다. /office budget <부서> <달러> (예: /office budget 개발팀 5)' }]
   }
+  if (view === 'playbook') return playbookBlocks(b, t)
   if (view === 'settings') return [{ t: 'title', text: '설정' }, { t: 'line', text: '글자를 누르면 바로 켜고 끕니다.' }, ...TOGGLES.map(x => ({ t: 'bullet', text: `${x.key}: ${x.isOn(b) ? '[켜짐]' : '[꺼짐]'} ${x.label}` } as const))]
   return rosterBlocks(b, t)
 }
@@ -330,7 +333,7 @@ async function openMenu(ctx: Ctx, first: string) {
 
 export default function agentOffice(pi: Pi) {
   pi.registerCommand('office', {
-    description: '에이전트 사무실: 인자 없이 평면도 켜고 끄기, menu(메뉴 화면), report [today|week], hr [<별칭>], rate <별칭> good|bad|clear, budget, approval·reorg·hr on|off',
+    description: '에이전트 사무실: 인자 없이 평면도 켜고 끄기, menu(메뉴 화면), playbook [<부서> adopt <n|all>|<부서> drop <n>](부서 지침), report [today|week], hr [<별칭>], rate <별칭> good|bad|clear, budget, approval·reorg·hr on|off',
     handler: async (args: string, ctx: Ctx) => {
       const a = (args ?? '').trim()
       if (a === '') {

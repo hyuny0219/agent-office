@@ -10,8 +10,9 @@ import { activityOf, layoutOf } from '../core/scene'
 import { answer, COMMAND } from './commands'
 import { awaitApproval, checkBudget, checkFollowUp, checkRework, EDIT_TOOLS, fileOf, isCheckCommand, papers, reorganize, reviewPlan, syncStatus, takeNotes, watch } from './flow'
 import { usageOf } from '../core/tokens'
+import { playbookLines } from '../core/playbook'
 import { briefNotes } from '../core/notes'
-import { cardView, flip, MENU, MENU_PANE, MENU_TITLE, nickOfView, ratableOf, rateJob, TOGGLES, viewBlocks } from './menu'
+import { cardView, flip, MENU, MENU_PANE, MENU_TITLE, nickOfView, playbookButtons, pressPlaybook, ratableOf, rateJob, TOGGLES, viewBlocks } from './menu'
 import { mdOf } from '../core/table'
 import { isShell } from '../core/watch'
 import { admit, agentsOf, chargeAgent, readMenuView, setMenuView, ensure, fresh, hold, hrOf, MEET_MS, meet, nickOfId, patch, readFeed, release, save, saveHr, speak, staff, watchAgents } from './store'
@@ -74,7 +75,8 @@ export const register: Register = (on, options) => {
         // 비교군은 실수 목록만 뺀다(나머지 메모는 같게 두어 실수 목록의 효과만 본다)
         // 개인 업무 노트: 비교군에는 흠·오류를 빼고 붙인다(실수 목록 역할을 하지 않도록, 실수 목록의 효과만 잰다)
         const book = await hrOf($)
-        brief = briefOf(book, employee, at, arm === 'control' ? [] : lessons, why, briefNotes(book, book.employees.find(x => x.nick === employee.nick) ?? employee, e.description, arm === 'control'))
+        // 부서 지침도 비교군에는 실수에서 온 지침을 뺀다
+        brief = briefOf(book, employee, at, arm === 'control' ? [] : lessons, why, briefNotes(book, book.employees.find(x => x.nick === employee.nick) ?? employee, e.description, arm === 'control'), playbookLines(book, employee.dept, arm === 'control'))
       }
       const spawned = await next(brief === null ? e : { ...e, prompt: `${e.prompt}\n\n${brief}` })
       if (spawned.deny !== undefined || spawned.agentId === undefined) return spawned
@@ -280,6 +282,7 @@ export const register: Register = (on, options) => {
     const view = await readMenuView($)
     const b = await hrOf($)
     const blocks = await viewBlocks($, b, view)
+    const buttons = view === 'playbook' ? playbookButtons(b, await $.clock.now()) : []
     const { Box, Text, Button, Markdown } = $.ui.resolve(e)
     const go = (v: string) => () => setMenuView($, v).catch(() => undefined)
     const card = nickOfView(view)
@@ -298,6 +301,15 @@ export const register: Register = (on, options) => {
               <Box key={`${t.key}-line`} columnGap={2}>
                 <Button key={t.key} plain onPress={() => flip($, t.key).catch(() => undefined)}>{`${t.isOn(b) ? '[켜짐]' : '[꺼짐]'} ${t.label}`}</Button>
                 <Text dimColor>{t.note}</Text>
+              </Box>
+            ))}
+          </Box>
+        )}
+        {view === 'playbook' && buttons.length > 0 && (
+          <Box marginTop={1} flexDirection="column">
+            {buttons.map(x => (
+              <Box key={`${x.key}-line`}>
+                <Button key={x.key} plain dimColor={x.kind === 'drop'} onPress={() => pressPlaybook($, x.key).catch(() => undefined)}>{x.label}</Button>
               </Box>
             ))}
           </Box>

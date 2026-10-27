@@ -225,7 +225,16 @@ export type HrBook = {
   budgets: Partial<Record<Dept, number>>
   /** 부서별로 예산 초과를 마지막으로 알린 때(24시간에 한 번만 알린다) */
   budgetNotices: Partial<Record<Dept, number>>
+  /** 부서 지침(대표가 승인한 개선안): 그 부서 업무 지시에 붙는다 */
+  playbooks?: Partial<Record<Dept, Playbook>>
 }
+
+/** 부서 지침: 채택한 지침, 마지막으로 적용한 때, 그때의 부서 성적(전후 비교용) */
+export type Playbook = { rules: PlaybookRule[]; appliedAt: number | null; before: DeptStats | null }
+/** 지침 하나: 같은 흠을 가리는 열쇠, 지침 글, 채택할 때의 근거, 채택한 때 */
+export type PlaybookRule = { key: string; text: string; why: string; at: number }
+/** 부서 성적(최근 업무): 건수, 평균 평가, 테스트 실패 완료·재작업·반려·대표 아쉬움·실패 비율 */
+export type DeptStats = { jobs: number; avgScore: number; checkFailRate: number; reworkRate: number; rejectRate: number; badRate: number; failRate: number }
 
 declare module 'claude-code' {
   interface PluginState {

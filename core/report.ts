@@ -257,6 +257,7 @@ export function rosterBlocks(b: HrBook, now: number): Block[] {
     { t: 'bullet', text: `대표 평가: 끝낸 일에 좋음 +${BOSS_RATE_POINTS} · 아쉬움 -${BOSS_RATE_POINTS}(메뉴의 인사카드, /office rate <별칭> good|bad|clear). 결재 정확도(승인+아쉬움은 놓친 승인, 반려+좋음은 빗나간 반려)와 적임자 배정에도 쓴다. 떠난 직원은 평가하지 않는다` },
     { t: 'bullet', text: '직급: 사원 0 · 대리 20 · 과장 60 · 차장 120 · 부장 200(경력, 감점이면 깎여 강등). 평균 평가는 최근 일에 무게를 둡니다' },
     { t: 'bullet', text: `예산: ${DEPTS.some(d => b.budgets[d] !== undefined) ? DEPTS.flatMap(d => (b.budgets[d] === undefined ? [] : [`${DEPT_INFO[d].ko} 하루 ${usdText(b.budgets[d] ?? 0)}`])).join(' · ') : '없음'}(넘으면 하루 한 번 알림, /office budget <부서> <달러>|off)` },
+    { t: 'bullet', text: '부서 지침: 반복되는 흠으로 만든 개선안을 대표가 채택하면 그 부서 업무 지시에 붙고 전후 성적을 견준다(/office playbook, 메뉴 6)' },
     { t: 'bullet', text: '배정: 쉬고 있는 부서 직원 중 비슷한 일을 잘 끝낸 사람·평균 평가가 높은 사람에게 맡깁니다' },
     { t: 'bullet', text: '조직 개편: 계속 평가가 나쁘면 권고사직, 오래 일이 없으면 계약 종료(/office reorg on|off)' },
     { t: 'bullet', text: '한 사람의 인사카드는 /office hr <별칭>, 부서 실적 보고는 /office report [today|week], 메뉴 화면은 /office menu' })

@@ -2,10 +2,12 @@
 // 무엇을 보고 있는지는 상태(menuView)에 둔다. 여기에는 메뉴 목록과 화면별 내용(블록)만 둔다.
 import type { EngineInterface } from 'claude-code'
 
-import type { BossRating, HrBook, JobRecord } from '../types'
-import { rate } from '../core/hr'
+import type { BossRating, Dept, HrBook, JobRecord } from '../types'
+import { DEPT_INFO, DEPTS, rate } from '../core/hr'
 import { rankChangeText } from '../core/answer'
 import { budgetBlocks } from '../core/budget'
+import { adopt, dropRule, playbookBlocks, proposalsOf, roomOf } from '../core/playbook'
+import type { Proposal } from '../core/playbook'
 import { cardBlocks, findEmployee, reportBlocks, rosterBlocks } from '../core/report'
 import type { Block } from '../core/table'
 import { agentsOf, saveHr } from './store'
@@ -21,6 +23,7 @@ export const MENU = [
   { key: 'menu-week', hotkey: '3', label: '주간 보고', view: 'week' },
   { key: 'menu-budget', hotkey: '4', label: '예산', view: 'budget' },
   { key: 'menu-settings', hotkey: '5', label: '설정', view: 'settings' },
+  { key: 'menu-playbook', hotkey: '6', label: '지침', view: 'playbook' },
 ] as const
 
 /** 인사카드 화면의 이름: card:<별칭> */
@@ -76,6 +79,36 @@ export async function viewBlocks($: EngineInterface, b: HrBook, view: string): P
     const blocks = budgetBlocks(b, await agentsOf($), now)
     return blocks.length > 0 ? blocks : [{ t: 'title', text: '부서 예산' }, { t: 'line', text: '부서 예산이 없습니다. 정하려면 /office budget <부서> <달러> (예: /office budget 개발팀 5), 없애려면 /office budget <부서> off' }]
   }
+  if (view === 'playbook') return playbookBlocks(b, now)
   if (view === 'settings') return [{ t: 'title', text: '설정' }, { t: 'line', text: '누르면 바로 켜고 끕니다.' }]
   return rosterBlocks(b, now)
+}
+
+/** 지침 화면의 버튼: 부서마다 후보 채택·지침 빼기 */
+export type PlaybookButton = { key: string; label: string; dept: Dept; kind: 'adopt' | 'drop'; ruleKey: string }
+/** 버튼 주소는 지침 열쇠로(번호로 두면 그린 뒤 후보가 바뀔 때 다른 지침을 가리킨다) */
+const slug = (key: string): string => encodeURIComponent(key)
+const short = (t: string): string => ([...t].length > 24 ? `${[...t].slice(0, 24).join('')}…` : t)
+export function playbookButtons(b: HrBook, now: number): PlaybookButton[] {
+  return DEPTS.flatMap(d => [
+    ...(roomOf(b, d) > 0 ? proposalsOf(b, d, now) : []).map((p: Proposal, i): PlaybookButton => ({ key: `adopt-${d}-${slug(p.key)}`, label: `채택 ${DEPT_INFO[d].ko} ${i + 1}: ${short(p.text)}`, dept: d, kind: 'adopt', ruleKey: p.key })),
+    ...(b.playbooks?.[d]?.rules ?? []).map((r, i): PlaybookButton => ({ key: `drop-${d}-${slug(r.key)}`, label: `빼기 ${DEPT_INFO[d].ko} ${i + 1}: ${short(r.text)}`, dept: d, kind: 'drop', ruleKey: r.key })),
+  ])
+}
+
+/** 지침 버튼을 누름: 저장한 값 위에서 채택하거나 빼고 다시 그린다 */
+export async function pressPlaybook($: EngineInterface, key: string) {
+  try {
+    const now = await $.clock.now()
+    await saveHr($, b => {
+      // 그때 화면에 있던 그 지침만(후보가 바뀌었으면 아무것도 하지 않는다)
+      const btn = playbookButtons(b, now).find(x => x.key === key)
+      if (btn === undefined) return b
+      if (btn.kind === 'drop') return dropRule(b, btn.dept, (b.playbooks?.[btn.dept]?.rules ?? []).findIndex(r => r.key === btn.ruleKey) + 1)
+      const p = proposalsOf(b, btn.dept, now).find(x => x.key === btn.ruleKey)
+      return p === undefined ? b : adopt(b, btn.dept, [p], now)
+    })
+  } finally {
+    $.ui.invalidate('ui.render')
+  }
 }

@@ -1,7 +1,7 @@
 // 인사 제도. 에이전트 종류로 부서를 정하고, 같은 부서 직원(별칭)이 일을 맡을 때마다 경력이 쌓인다.
 // 평가는 실제 기록(완료·실패·도구 오류·거절)으로만 매기고, 부서가 반복한 실수는 "교훈"으로 모아
 // 다음에 그 부서 직원이 일을 맡을 때 업무 지시 끝에 짧은 인사 메모로 붙인다. 순수 함수만 둔다.
-import type { BossRating, WorkNote, Approval, Dept, Employee, Handoff, HrBook, JobRecord, Lesson, Retiree } from '../types'
+import type { BossRating, DeptStats, Playbook, WorkNote, Approval, Dept, Employee, Handoff, HrBook, JobRecord, Lesson, Retiree } from '../types'
 import { tokensOf } from './tokens'
 
 export const DEPTS: Dept[] = ['dev', 'research', 'qa', 'plan', 'docs', 'ops']
@@ -143,6 +143,25 @@ export function migrate(stored: unknown): HrBook | null {
   }
   const isNum = (x: unknown): x is number => typeof x === 'number' && Number.isFinite(x)
   /** 부서 → 수(모르는 부서·수가 아닌 값·조건에 맞지 않는 값은 버린다) */
+  const statsOk = (x: unknown): DeptStats | null => {
+    if (typeof x !== 'object' || x === null) return null
+    const o = x as Record<string, unknown>
+    const keys = ['jobs', 'avgScore', 'checkFailRate', 'reworkRate', 'rejectRate', 'badRate', 'failRate'] as const
+    return keys.every(k => isNum(o[k])) ? Object.fromEntries(keys.map(k => [k, o[k] as number])) as DeptStats : null
+  }
+  const playbooksOf = (x: unknown): { playbooks?: Partial<Record<Dept, Playbook>> } => {
+    if (typeof x !== 'object' || x === null) return {}
+    const out: Partial<Record<Dept, Playbook>> = {}
+    for (const [d, p] of Object.entries(x as Record<string, unknown>)) {
+      if (!isDept(d) || typeof p !== 'object' || p === null) continue
+      const o = p as Record<string, unknown>
+      const rules = (Array.isArray(o.rules) ? o.rules : []).filter((r): r is Record<string, unknown> => typeof r === 'object' && r !== null && typeof r.key === 'string' && typeof r.text === 'string')
+        .map(r => ({ key: r.key as string, text: (r.text as string).slice(0, 200), why: typeof r.why === 'string' ? r.why.slice(0, 200) : '', at: isNum(r.at) ? r.at : 0 }))
+        .filter((r, i, all) => all.findIndex(x => x.key === r.key) === i).slice(-MAX_PLAYBOOK_RULES)
+      if (rules.length > 0) out[d] = { rules, appliedAt: isNum(o.appliedAt) ? o.appliedAt : null, before: statsOk(o.before) }
+    }
+    return Object.keys(out).length === 0 ? {} : { playbooks: out }
+  }
   const perDept = (x: unknown, isOk: (n: number) => boolean): Partial<Record<Dept, number>> => {
     const o = typeof x === 'object' && x !== null ? x as Record<string, unknown> : {}
     return Object.fromEntries(DEPTS.flatMap(d => (isNum(o[d]) && isOk(o[d]) ? [[d, o[d]]] : [])))
@@ -167,6 +186,7 @@ export function migrate(stored: unknown): HrBook | null {
     isCoaching: v.isCoaching !== false, isTrialing: v.isTrialing !== false, isApproving: v.isApproving !== false, isApprovalNoticed: v.isApprovalNoticed === true, trialSeq: num(v.trialSeq, 0),
     isReorganizing: v.isReorganizing !== false, isReorgNoticed: v.isReorgNoticed === true,
     budgets: perDept(v.budgets, x => x > 0), budgetNotices: perDept(v.budgetNotices, () => true),
+    ...(playbooksOf(v.playbooks)),
   }
 }
 
@@ -204,6 +224,8 @@ export function review(book: HrBook, nick: string, r: JobResult, now: number): M
 
 /** 끝낸 일 기록은 최근 것 300건까지 */
 export const MAX_LOG = 300
+/** 부서마다 둘 수 있는 지침 수 */
+export const MAX_PLAYBOOK_RULES = 8
 /** 떠난 직원은 최근 50명까지 */
 export const MAX_RETIRED = 50
 
@@ -377,7 +399,9 @@ export const lessonsFor = (book: HrBook, dept: Dept, now?: number): Lesson[] =>
  * 업무 지시 끝에 붙일 인사 메모(짧게). 코칭이 꺼져 있으면 null.
  * lessons를 주면 그 실수를 붙이고(비교군이면 빈 목록), 안 주면 lessonsFor로 고른다.
  */
-export function briefOf(book: HrBook, e: Employee, now?: number, lessons: readonly Lesson[] = lessonsFor(book, e.dept, now), why: string | null = null, notes: readonly string[] = []): string | null {
+export function briefOf(book: HrBook, e: Employee, now?: number, lessons: readonly Lesson[] = lessonsFor(book, e.dept, now), why: string | null = null, notes: readonly string[] = [], rules: readonly string[] = (book.playbooks?.[e.dept]?.rules ?? []).map(r => r.text)): string | null {
+  // 지침에 이미 있는 피하는 법은 실수 줄에서 다시 쓰지 않는다
+  const shown = new Set(rules)
   if (!book.isCoaching) return null
   const dept = DEPT_INFO[e.dept]
   const lead = leadOf(book, e.dept)
@@ -388,11 +412,15 @@ export function briefOf(book: HrBook, e: Employee, now?: number, lessons: readon
       (e.jobs > 0 ? ` 지난 기록: 완료 ${e.done} · 실패 ${e.failed} · 도구 오류 ${e.toolErrors}${e.reworks > 0 ? ` · 재작업 ${e.reworks}` : ''}${e.alarms > 0 ? ` · 근태 알림 ${e.alarms}` : ''}, 최근 평가 ${gradeOf(e.lastScore ?? 0)}.` : ' 첫 업무입니다.') +
       (why === null ? '' : ` 배정 사유: ${why}.`),
   ]
+  if (rules.length > 0) {
+    lines.push(`${dept.ko} 지침(대표가 승인함):`)
+    for (const r of rules) lines.push(`- ${r}`)
+  }
   if (lessons.length > 0) {
     lines.push(`${dept.ko}이 최근 반복한 실수입니다. 이번에는 피하세요:`)
     for (const l of lessons) {
       const tip = tipOf(l.pattern)
-      lines.push(`- ${l.tool} "${l.pattern}" ${l.count}회${tip === null ? '' : ` → ${tip}`}`)
+      lines.push(`- ${l.tool} "${l.pattern}" ${l.count}회${tip === null || shown.has(tip) ? '' : ` → ${tip}`}`)
     }
   }
   if (notes.length > 0) {
