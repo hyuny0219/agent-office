@@ -1,0 +1,36 @@
+ 0 사무실   1 인사 명부   2 일간 보고   3 주간 보고   4 예산   5 설정   6 지침   7 기록    q 닫기
+
+BOSS 보스 대표 · 회의실: 곰과 대화 · Opus 5.5 · 도구 12회 · 토큰 172k($1.20) · 7분 · -
+BEAR 곰 대리·팀장 (개발팀) · 회의실: 보스와 대화 · Sonnet 5.5 · 토큰 172k($0.30) · 결제 화면 고치기
+OWL 부엉이 사원·팀장 (조사팀) · 자료실 Grep · Haiku 5.5 · 도구 12회 · 오류 2 · 7분 · 로그 형식 조사
+HAWK 매 사원·팀장 (품질팀) · 서버실 Bash · Sonnet 5.5 · 도구 12회 · 7분 · 테스트 돌리고 리뷰
+
+   AGENT OFFICE  working 3  meeting 2  done 0
+  CEO               MEETING                  LIBRARY                    SERVER       WC
+
+                                              OWL
+
+                      BOSS  BEAR                                       HAWK
+
+
+
+
+
+
+
+  OFFICE                                                                 PANTRY
+
+      DEV                 RESEARCH            QA
+
+
+
+
+
+
+
+
+
+
+
+
+목록 줄이나 평면도의 사람·이름표·책상 명패·말풍선을 누르면 그 직원의 인사카드를 엽니다(이 화면에서만

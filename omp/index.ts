@@ -26,8 +26,8 @@ import { textOf } from '../core/table'
 import { markSeen, playbookLines, proposalNotices, tellProposals } from '../core/playbook'
 import { ansiLines } from './ansi'
 import { agents, changed, feedOf, hr, HR_DIR, onChange, patch, saveHr, say, takeLoadWarning, trim } from './store'
-import { menuLines, MENU, sideLines, TOGGLES, viewBlocks, widgetLines } from './view'
-import type { PlanLines, Scene } from './view'
+import { clickOf, isMouseReport, MENU, menuScreen, sideLines, TOGGLES, viewBlocks, widgetLines } from './view'
+import type { PlanLines, PlanView, Scene } from './view'
 import { descriptionOf, gatesFor, tasksOf } from './tasks'
 
 // oh-my-pi의 형식은 확장 쪽에서 느슨하게 받는다(판마다 바뀌는 타입에 묶이지 않도록)
@@ -387,24 +387,71 @@ async function openMenu(ctx: Ctx, first: string) {
     markdown = null
   }
   if (first === 'playbook') seePlaybook()
+  // 온 화면(보조 화면)으로 띄운다: 그동안 omp가 마우스 보고를 켜 주어 평면도의 사람·목록 줄을 눌러 인사카드를 연다
   await ctx.ui.custom((tui: any, _theme: any, _kb: any, done: (r: undefined) => void) => {
     let view = first
+    let last: ReturnType<typeof menuScreen> | null = null
+    // 메뉴 화면의 평면도(폭이 바뀌면 새로 짓는다). 사무실 화면을 보는 동안 프레임마다 걷는다
+    let menuOffice: Office | null = null
+    let menuFrame = 0
+    // 걸음은 타이머 프레임마다 한 번만(마우스 움직임 보고로 다시 그릴 때마다 걸으면 사람들이 빨라진다). 같은 프레임이면 지난 그림
+    let drawnFrame = -1
+    let drawn: string[] = []
+    const plan: PlanView = {
+      lines: (columns: number) => {
+        const layout = layoutOf(columns)
+        const isNew = menuOffice === null || menuOffice.layout.columns !== layout.columns
+        if (isNew) menuOffice = new Office(layout)
+        if (!isNew && drawnFrame === menuFrame) return drawn
+        const b = hr()
+        const leads = Object.fromEntries(DEPTS.map(d => [d, leadOf(b, d)?.nick]).filter(([, n]) => n !== undefined))
+        drawn = ansiLines((menuOffice as Office).draw([...agents.values()], menuFrame, now(), leads), layout.columns, layout.rows)
+        drawnFrame = menuFrame
+        return drawn
+      },
+      nickAt: (col: number, row: number) => menuOffice?.nickAt(col, row) ?? null,
+    }
+    const walk = setInterval(() => {
+      menuFrame++
+      if (view === 'office') tui.requestRender?.()
+    }, FRAME_MS)
+    walk.unref?.()
+    const go = (next: string) => {
+      view = next
+      if (view === 'playbook') seePlaybook()
+    }
+    const close = () => {
+      clearInterval(walk)
+      done(undefined)
+    }
     return {
       render(width: number): string[] {
-        return menuLines(view, width, sceneNow(), markdown)
+        // 화면이 짧으면 사무실 화면의 평면도를 뺀다(목록이 화면 밖으로 밀려나지 않도록)
+        last = menuScreen(view, width, sceneNow(), markdown, plan, tui.terminal?.rows)
+        return last.lines
       },
       handleInput(data: string) {
-        const m = MENU.find(x => x.key === data)
-        if (m !== undefined) {
-          view = m.view
-          if (view === 'playbook') seePlaybook()
-        } else if (view === 'settings' && TOGGLES.some(x => x.key === data)) saveHr(TOGGLES.find(x => x.key === data)!.flip)
-        else if (data === 'q' || data === '\x1b') return done(undefined)
+        // 마우스 보고는 글자로 받지 않는다(누름이면 그 칸이 가리키는 화면으로)
+        if (isMouseReport(data)) {
+          const at = clickOf(data)
+          const target = at === null || last === null ? null : last.targetAt(at.row, at.col)
+          if (target === 'close') return close()
+          if (target !== null) go(target)
+        } else {
+          const m = MENU.find(x => x.key === data)
+          if (m !== undefined) go(m.view)
+          else if (view === 'settings' && TOGGLES.some(x => x.key === data)) saveHr(TOGGLES.find(x => x.key === data)!.flip)
+          else if (data === 'q' || data === '\x1b') return close()
+        }
         tui.requestRender?.()
       },
       invalidate() {},
+      dispose() {
+        clearInterval(walk)
+      },
     }
-  }, { overlay: true })
+    // 왼쪽 위(0줄·0칸)부터 온 폭으로 그려야 마우스가 알려 준 칸이 그린 줄의 칸과 맞는다
+  }, { overlay: true, overlayOptions: { fullscreen: true, mouseTracking: true, anchor: 'top-left', row: 0, col: 0, width: '100%', maxHeight: '100%', margin: 0 } })
 }
 
 // ── 예산 조치: 한도를 넘은 부서에 새 일(task)을 맡기기 전에 묻는다(계속 / 이번만 / 맡기지 않기) ─────────────

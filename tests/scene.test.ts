@@ -1,8 +1,8 @@
 // 테스트: 평면도(별칭·방 옮기기·회의·퇴근).
 import { expect, test } from 'claude-code/testing'
 
-import { encodeCells, koNick, layoutOf, nickFor, Office, PLAN_ROWS } from '../core/scene'
-import { agent, boss, run, rowOf, screen } from './kit'
+import { Office, PLAN_ROWS, encodeCells, koNick, layoutOf, nickFor } from '../core/scene'
+import { agent, boss, rowOf, run, screen } from './kit'
 
 test('별칭: 종류별 별칭을 먼저 주고, 이미 쓴 별칭은 피하며, 다 쓰면 번호를 붙인다', () => {
   expect(nickFor('main', [])).toBe('BOSS')
@@ -70,4 +70,28 @@ test('대화하면 회의실에 모이고, 끝내면 보고한 뒤 입구로 퇴
   expect(office.whereIs('a1')?.room).toBe('meet')
   run(office, [boss, done], 100, 40_000)
   expect(office.whereIs('a1')).toBeNull()
+})
+
+test('평면도 누르기: 마지막 그림에서 사람·이름표·책상 명패가 있는 칸은 그 사람의 별칭, 빈 바닥은 null', () => {
+  const office = new Office(layoutOf(96))
+  const people = [boss, agent('a1', { nick: 'BEAR', dept: 'dev', activity: 'read', tool: 'Grep' }), agent('a2', { nick: 'OWL', dept: 'research', activity: 'type' })]
+  const words = run(office, people, 120)
+  const text = screen(words, 96).split('\n')
+  // 이름표·명패 글자가 있는 칸을 누르면 그 사람
+  for (const nick of ['BEAR', 'OWL']) {
+    const row = text.findIndex(l => l.includes(nick))
+    expect(row).toBeGreaterThanOrEqual(0)
+    expect(office.nickAt(text[row]!.indexOf(nick) + 1, row)).toBe(nick)
+  }
+  // 누르면 사람이 되는 칸은 사람·이름표·명패 둘레뿐이고, 나머지 바닥은 아무도 아니다
+  let hit = 0
+  for (let row = 0; row < text.length; row++) for (let col = 0; col < 96; col++) if (office.nickAt(col, row) !== null) hit++
+  expect(hit).toBeGreaterThan(0)
+  expect(hit).toBeLessThan(96 * text.length / 10)
+  expect(office.nickAt(-5, -5)).toBeNull()
+  // 다음 그림에서 떠난 사람은 누를 수 없다(지난 그림의 칸이 남지 않는다)
+  const owlRow = text.findIndex(l => l.includes('OWL'))
+  const owlCol = text[owlRow]!.indexOf('OWL') + 1
+  run(office, [boss, people[1]!], 200)
+  expect(office.nickAt(owlCol, owlRow)).not.toBe('OWL')
 })

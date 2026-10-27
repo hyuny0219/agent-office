@@ -425,6 +425,8 @@ export class Office {
   private readonly seats = new Map<string, number>()
   private clusterOf = new Map<Dept, number>()
   private isFresh = true
+  /** 마지막 그림에서 누르면 그 사람이 되는 칸(글자 칸 좌표, 나중에 그린 것이 위) */
+  private hits: { nick: string; x: number; y: number; w: number; h: number }[] = []
 
   constructor(readonly layout: Layout) {
     this.plan = planOf(layout.columns)
@@ -560,6 +562,7 @@ export class Office {
 
   /** 한 걸음 움직이고 그린 장면의 셀. leads는 부서마다 팀장 별칭(빈 팀장 책상에 이름을 흐리게 단다) */
   draw(agents: readonly OfficeAgent[], frame: number, now: number, leads: Leads = {}): Uint32Array {
+    this.hits = []
     this.step(agents, now, leads)
     const plan = this.plan
     const cv = new Canvas(this.layout.columns, this.layout.rows * 2)
@@ -614,7 +617,10 @@ export class Office {
         const nick = owner?.nick ?? (seat === 0 ? leads[dept] : undefined)
         const deskColor = seat === 0 ? C.deskLead : C.desk
         cv.rect(x, c.y, width, 2, deskColor)
-        if (nick !== undefined) cv.write(x, c.y / 2, nick.slice(0, width).padEnd(width), owner === undefined ? shade(nickInfo(nick).color, 0.6) : nickInfo(nick).color, deskColor)
+        if (nick !== undefined) {
+          cv.write(x, c.y / 2, nick.slice(0, width).padEnd(width), owner === undefined ? shade(nickInfo(nick).color, 0.6) : nickInfo(nick).color, deskColor)
+          this.hits.push({ nick, x, y: c.y / 2, w: width, h: 1 })
+        }
       }
     }
     // 사장 책상 모니터
@@ -630,6 +636,8 @@ export class Office {
       const info = nickInfo(a.nick)
       const isMoving = wk.route.length > 0
       if (!isMoving && wk.goal?.hidden) continue
+      // 몸(머리 위 이름표 줄부터 발까지)
+      this.hits.push({ nick: a.nick, x: wk.x - 1, y: Math.floor(wk.y / 2) - 1, w: 5, h: 3 })
       const isUp = !isMoving && (wk.goal?.up ?? false)
       person(cv, wk, info.color, HAIRS[hash(a.id) % HAIRS.length] ?? C.black, isUp, isMoving ? frame : null)
       if (isSpeaking(a.say, now)) speakers.push({ a, x: wk.x, y: wk.y })
@@ -669,6 +677,7 @@ export class Office {
         const tx = Math.max(0, Math.min(plan.w - tag.length, wk.x + 1 - Math.floor(tag.length / 2)))
         cv.write(tx, Math.floor(wk.y / 2) - 1, tag, a.activity === 'failed' ? C.red : info.color, C.label)
         take(tx, Math.floor(wk.y / 2) - 1, tag.length)
+        this.hits.push({ nick: a.nick, x: tx, y: Math.floor(wk.y / 2) - 1, w: tag.length, h: 1 })
       }
     }
     // 말풍선은 이름표를 다 그린 뒤에 빈자리에(이름표를 덮지 않도록). 걷는 중에도 말한다
@@ -681,6 +690,8 @@ export class Office {
       if (row === null) continue
       const fg = bubble.tone === 'bad' ? C.red : bubble.tone === 'good' ? C.green : bubble.tone === 'self' ? 0x555566 : C.black
       cv.write(bx, row, text, fg, C.white)
+      // 말풍선은 이름표·몸 위에 칠하니, 누르면 말한 사람
+      this.hits.push({ nick: a.nick, x: bx, y: row, w: text.length, h: 1 })
     }
 
     // 제목
@@ -689,6 +700,15 @@ export class Office {
     const blink = frame % 4 < 2 ? '*' : ' '
     cv.write(0, 0, ` ${blink} AGENT OFFICE  working ${live}  meeting ${talkers.length}  done ${done}`.padEnd(plan.w), C.yellow, C.label)
     return cv.cells()
+  }
+
+  /** 마지막으로 그린 평면도의 그 글자 칸(0부터)에 있는 사람(사람·이름표·책상 명패)의 별칭, 없으면 null */
+  nickAt(col: number, row: number): string | null {
+    for (let i = this.hits.length - 1; i >= 0; i--) {
+      const h = this.hits[i] as (typeof this.hits)[number]
+      if (col >= h.x && col < h.x + h.w && row >= h.y && row < h.y + h.h) return h.nick
+    }
+    return null
   }
 
   /** 그 사람이 지금 있는 방(걷는 중이면 isMoving). 들어오지 않았거나 퇴근했으면 null */

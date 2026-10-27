@@ -5,7 +5,7 @@ import type { OfficeAgent } from '../types'
 import { emptyBook, hire, record, setDept } from '../core/hr'
 import { markSeen } from '../core/playbook'
 import { widthOf } from '../core/table'
-import { clip, menuHead, menuLines, MENU, pad, plain, sideLines, TWO_COLUMN_MIN, viewBlocks, widgetLines } from './view'
+import { clickOf, clip, isMouseReport, menuHead, menuLines, MENU, menuScreen, pad, plain, sideLines, TWO_COLUMN_MIN, viewBlocks, widgetLines } from './view'
 import type { Scene } from './view'
 
 const NOW = 1_000_000
@@ -50,6 +50,50 @@ describe('새 지침 후보 알림', () => {
   })
 })
 
+describe('메뉴 누르기', () => {
+  test('마우스 보고: 왼쪽 누름만 칸(0부터)으로 읽고, 놓기·움직임·휠은 아니다', () => {
+    expect(clickOf('\x1b[<0;10;3M')).toEqual({ col: 9, row: 2 })
+    expect(clickOf('\x1b[<0;10;3m')).toBeNull()
+    expect(clickOf('\x1b[<32;10;3M')).toBeNull()
+    expect(clickOf('\x1b[<64;10;3M')).toBeNull()
+    expect(clickOf('\x1b[<2;10;3M')).toBeNull()
+    expect(clickOf('a')).toBeNull()
+    expect(isMouseReport('\x1b[<35;1;1M')).toBe(true)
+  })
+  test('맨 위 메뉴를 누르면 그 화면, 사무실 화면의 평면도 사람·목록 줄과 명부 줄을 누르면 그 직원의 인사카드', () => {
+    // 업무 설명에 다른 직원 별칭(OWL)이 적혀 있어도 목록 줄은 그 줄의 사람
+    const owl = { ...bear, id: 'a2', nick: 'OWL', dept: 'research' as const, description: 'BEAR 코드 검토' }
+    const s = scene({ agents: [bear, owl], book: hire(hire(emptyBook(), 'BEAR', 'dev', 'builder', 0).book, 'OWL', 'research', 'Explore', 0).book })
+    const fake = { lines: () => ['PLAN-ROW-0', 'PLAN-ROW-1'], nickAt: (col: number, row: number) => (row === 1 && col === 3 ? 'BEAR' : row === 0 ? 'NOBODY' : null) }
+    const scr = menuScreen('office', 100, s, null, fake)
+    // 메뉴 줄·빈 줄 다음 목록 두 줄, 빈 줄, 평면도
+    expect(plain(scr.lines[2] ?? '').startsWith('BEAR')).toBe(true)
+    expect(plain(scr.lines[5] ?? '')).toBe('PLAN-ROW-0')
+    expect(scr.targetAt(2, 0)).toBe('card:BEAR')
+    expect(scr.targetAt(3, 40)).toBe('card:OWL')
+    // 맨 위 메뉴: ' 0 사무실 ' 다음 ' 1 인사 명부 ', 끝의 'q 닫기'
+    expect(scr.targetAt(0, 1)).toBe('office')
+    expect(scr.targetAt(0, widthOf(' 0 사무실 ') + 2)).toBe('hr')
+    const head = plain(scr.lines[0] ?? '')
+    expect(scr.targetAt(0, widthOf(head.slice(0, head.indexOf('q 닫기'))) + 1)).toBe('close')
+    // 고른 메뉴(뒤집어 보임)도 같은 칸
+    expect(menuScreen('hr', 100, s, null, null).targetAt(0, widthOf(' 0 사무실 ') + 2)).toBe('hr')
+    // 평면도: 사람이면 인사카드, 명부에 없는 별칭이나 빈 곳은 아무것도
+    expect(scr.targetAt(6, 3)).toBe('card:BEAR')
+    expect(scr.targetAt(5, 0)).toBeNull()
+    expect(scr.targetAt(6, 50)).toBeNull()
+    // 명부 화면의 그 직원 줄은 인사카드, 다른 화면의 글 속 별칭은 아무것도
+    const roster = menuScreen('hr', 120, s, null, null)
+    const r = roster.lines.findIndex(l => /BEAR/.test(plain(l)))
+    expect(roster.targetAt(r, 0)).toBe('card:BEAR')
+    const today = menuScreen('today', 120, s, null, null)
+    expect(today.lines.map((_, i) => today.targetAt(i, 0)).filter(t => t !== null && t.startsWith('card:'))).toEqual([])
+    // 좁거나 짧으면 평면도 없이 목록만
+    expect(menuScreen('office', 60, s, null, fake).lines.some(l => plain(l).includes('PLAN'))).toBe(false)
+    expect(menuScreen('office', 100, s, null, fake, 20).lines.some(l => plain(l).includes('PLAN'))).toBe(false)
+  })
+})
+
 describe('사이드바', () => {
   test('내용 높이만큼의 테두리 상자이고, 평면도는 안쪽 72칸 이상일 때만 넣는다', () => {
     const box = sideLines(48, scene(), () => ['PLAN'])
@@ -63,7 +107,7 @@ describe('사이드바', () => {
 
 describe('메뉴 화면', () => {
   test('1~7: 고른 메뉴는 뒤집어 보이고, 7은 월별 기록, 설정에는 부서 배치 표가 있다', () => {
-    expect(MENU.map(m => m.key).join('')).toBe('1234567')
+    expect(MENU.map(m => m.key).join('')).toBe('01234567')
     expect(menuHead('archive')).toContain('\x1b[7m 7 기록 \x1b[0m')
     const s = scene({ book: setDept(record(hire(emptyBook(), 'BEAR', 'dev', 'builder', 0).book, { nick: 'BEAR', dept: 'dev', job: 1, description: '빌드', startedAt: 0, endedAt: NOW, outcome: 'done', score: 13, errors: 0, isCheckFailed: false, isReworked: false, alarms: 0 }), 'builder', 'qa') })
     const archive = menuLines('archive', 120, s, null).map(plain).join('\n')
