@@ -181,9 +181,9 @@ claude plugin test .
 claude --plugin-dir .
 ```
 
-`hooks/register.tsx` only wires engine events; the work is split up: `store.ts` (state and persistence), `flow.ts` (sync, reviews, approvals, attendance, reorganization), `view.ts` (pane rows, painting the floor plan), `commands.ts` (`/office` text answers), `menu.ts` (the menu pane's items and per-view content), `notes.ts` (personal work notes), `table.ts` (aligned tables and document blocks rendered as text or Markdown). Decisions live in pure modules: `hr.ts` (HR), `org.ts` (assignment, approval accuracy, reorganization), `approval.ts` (approvals), `speech.ts` (chatter), `report.ts` (reports, roster, personnel cards), `tokens.ts` (token usage and cost), `budget.ts` (department budgets), `trial.ts` (training effect), `watch.ts` (attendance), `scene.ts` (floor plan).
+`hooks/register.tsx` only wires engine events; the work is split up: `store.ts` (state and persistence), `flow.ts` (sync, reviews, approvals, attendance, reorganization), `view.ts` (pane rows, painting the floor plan), `commands.ts` (`/office` text answers), `menu.ts` (the menu pane's items and per-view content). Decisions live in engine-agnostic pure modules under `core/` (they never see Claude Code's `$`, so another agent engine can reuse them): `table.ts` (aligned tables and document blocks rendered as text or Markdown), `notes.ts` (personal work notes), `hr.ts` (HR), `org.ts` (assignment, approval accuracy, reorganization), `approval.ts` (approvals), `speech.ts` (chatter), `report.ts` (reports, roster, personnel cards), `tokens.ts` (token usage and cost), `budget.ts` (department budgets), `trial.ts` (training effect), `watch.ts` (attendance), `scene.ts` (floor plan).
 
-The README screenshots (`docs/office.png`, `docs/office.gif`) are made by running `hooks/scene.ts` itself (needs Pillow):
+The README screenshots (`docs/office.png`, `docs/office.gif`) are made by running `core/scene.ts` itself (needs Pillow):
 
 ```
 npx tsx scripts/screenshot-frames.mts > /tmp/frames.json

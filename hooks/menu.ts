@@ -3,13 +3,13 @@
 import type { EngineInterface } from 'claude-code'
 
 import type { BossRating, HrBook, JobRecord } from '../types'
-import { rate } from './hr'
+import { rate } from '../core/hr'
 import { rankChangeText } from './commands'
-import { budgetBlocks } from './budget'
-import { cardBlocks, findEmployee, reportBlocks, rosterBlocks } from './report'
-import type { Block } from './table'
+import { budgetBlocks } from '../core/budget'
+import { cardBlocks, findEmployee, reportBlocks, rosterBlocks } from '../core/report'
+import type { Block } from '../core/table'
 import { agentsOf, saveHr } from './store'
-import { APPROVER_MODEL } from './approval'
+import { APPROVER_MODEL } from '../core/approval'
 
 export const MENU_PANE = 'agent-office-menu'
 export const MENU_TITLE = '사무실 메뉴'

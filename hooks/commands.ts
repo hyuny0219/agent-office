@@ -1,15 +1,15 @@
 // /office 명령. 결재·보고서·인사 기록·켜고 끄기를 글로 답한다. 인자가 없으면 null(패널을 연다).
 import type { EngineInterface } from 'claude-code'
 
-import { APPROVER_MODEL, REJECT_PENALTY } from './approval'
-import { cardOf, findEmployee, reportOf, rosterText } from './report'
-import type { Period } from './report'
-import { IDLE_JOBS, IDLE_MS, RETIRE_AVG, RETIRE_JOBS } from './org'
-import { CONTROL_EVERY } from './trial'
+import { APPROVER_MODEL, REJECT_PENALTY } from '../core/approval'
+import { cardOf, findEmployee, reportOf, rosterText } from '../core/report'
+import type { Period } from '../core/report'
+import { IDLE_JOBS, IDLE_MS, RETIRE_AVG, RETIRE_JOBS } from '../core/org'
+import { CONTROL_EVERY } from '../core/trial'
 import { agentsOf, hrOf, saveHr } from './store'
-import { budgetLines, deptNamed, dollarsOf } from './budget'
-import { usdText } from './tokens'
-import { BOSS_RATE_POINTS, DEPT_INFO, DEPTS, rate } from './hr'
+import { budgetLines, deptNamed, dollarsOf } from '../core/budget'
+import { usdText } from '../core/tokens'
+import { BOSS_RATE_POINTS, DEPT_INFO, DEPTS, rate } from '../core/hr'
 
 /** 평가로 직급이 바뀌었으면 한마디 */
 export const rankChangeText = (m: { promotedTo: string | null; demotedTo: string | null } | null): string =>

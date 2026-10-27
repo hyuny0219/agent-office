@@ -3,14 +3,14 @@
 import type { EngineInterface } from 'claude-code'
 
 import type { HrBook, OfficeActivity, OfficeAgent, Utterance } from '../types'
-import { DEPT_INFO, leadOf, rankOf } from './hr'
-import { isSpeaking, lineText } from './speech'
-import { ERROR_STREAK, isOvertime, REPEAT_STREAK } from './watch'
-import { encodeCells, isMeeting, koNick, Office, seated, shortType } from './scene'
-import type { Layout } from './scene'
+import { DEPT_INFO, leadOf, rankOf } from '../core/hr'
+import { isSpeaking, lineText } from '../core/speech'
+import { ERROR_STREAK, isOvertime, REPEAT_STREAK } from '../core/watch'
+import { encodeCells, isMeeting, koNick, Office, seated, shortType } from '../core/scene'
+import type { Layout } from '../core/scene'
 import { syncStatus } from './flow'
-import { costText, modelLabel, totalOf, useText } from './tokens'
-import { widthOf } from './table'
+import { costText, modelLabel, totalOf, useText } from '../core/tokens'
+import { widthOf } from '../core/table'
 import { agentsOf, hrOf, leadsOf } from './store'
 
 export { widthOf }

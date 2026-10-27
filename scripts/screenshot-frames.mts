@@ -1,7 +1,7 @@
 // README 스크린샷용 장면. mod의 scene.ts를 그대로 돌려 프레임마다 셀을 뽑아 JSON으로 쓴다.
 // 사용: npx tsx scripts/screenshot-frames.mts > frames.json  (그다음 scripts/render-screenshot.py)
 import type { OfficeAgent } from '../types'
-import { Office, layoutOf } from '../hooks/scene.ts'
+import { Office, layoutOf } from '../core/scene.ts'
 
 const COLUMNS = 96
 const FRAMES = 90

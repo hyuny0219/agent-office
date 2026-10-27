@@ -4,13 +4,13 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface } from 'claude-code'
 
 import type { Bubble, HrBook, OfficeAgent, TokenUse, Utterance } from '../types'
-import { assign, DEPTS, deptOf, emptyBook, hire, leadOf, migrate } from './hr'
-import { pickFor } from './org'
-import type { Assignment } from './org'
-import { pushLine } from './speech'
-import { addTokens, tokensOf, totalOf } from './tokens'
-import { nickFor } from './scene'
-import type { Leads } from './scene'
+import { assign, DEPTS, deptOf, emptyBook, hire, leadOf, migrate } from '../core/hr'
+import { pickFor } from '../core/org'
+import type { Assignment } from '../core/org'
+import { pushLine } from '../core/speech'
+import { addTokens, tokensOf, totalOf } from '../core/tokens'
+import { nickFor } from '../core/scene'
+import type { Leads } from '../core/scene'
 
 /** 대화 한 번에 회의실에 머무는 시간 */
 export const MEET_MS = 8000

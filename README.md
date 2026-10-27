@@ -183,9 +183,9 @@ claude plugin test .
 claude --plugin-dir .
 ```
 
-`hooks/register.tsx`는 엔진의 사건을 잇기만 하고, 일은 나눠 둡니다: `store.ts`(상태·저장), `flow.ts`(동기화·평가·결재·근태·조직 개편), `view.ts`(패널 줄·평면도 칠하기), `commands.ts`(`/office` 글 답), `menu.ts`(메뉴 화면의 메뉴·화면별 내용), `notes.ts`(개인 업무 노트), `table.ts`(칸 맞춤 표와 문서 블록: 같은 내용을 글·마크다운으로). 판단은 순수 함수 모듈이 합니다: `hr.ts`(인사), `org.ts`(배정·결재 정확도·조직 개편), `approval.ts`(결재), `speech.ts`(대화), `report.ts`(보고서·명부·인사카드), `tokens.ts`(토큰 사용량·비용), `budget.ts`(부서 예산), `trial.ts`(교육 효과), `watch.ts`(근태), `scene.ts`(평면도).
+`hooks/register.tsx`는 엔진의 사건을 잇기만 하고, 일은 나눠 둡니다: `store.ts`(상태·저장), `flow.ts`(동기화·평가·결재·근태·조직 개편), `view.ts`(패널 줄·평면도 칠하기), `commands.ts`(`/office` 글 답), `menu.ts`(메뉴 화면의 메뉴·화면별 내용). 판단은 엔진과 무관한 순수 함수 모듈이 `core/`에서 합니다(Claude Code의 `$`를 모르며, 다른 에이전트 엔진에서도 그대로 쓰도록 나눠 둠): `table.ts`(칸 맞춤 표와 문서 블록: 같은 내용을 글·마크다운으로), `notes.ts`(개인 업무 노트), `hr.ts`(인사), `org.ts`(배정·결재 정확도·조직 개편), `approval.ts`(결재), `speech.ts`(대화), `report.ts`(보고서·명부·인사카드), `tokens.ts`(토큰 사용량·비용), `budget.ts`(부서 예산), `trial.ts`(교육 효과), `watch.ts`(근태), `scene.ts`(평면도).
 
-README 스크린샷(`docs/office.png`, `docs/office.gif`)은 `hooks/scene.ts`를 그대로 돌려 만듭니다(Pillow 필요).
+README 스크린샷(`docs/office.png`, `docs/office.gif`)은 `core/scene.ts`를 그대로 돌려 만듭니다(Pillow 필요).
 
 ```
 npx tsx scripts/screenshot-frames.mts > /tmp/frames.json
