@@ -1,7 +1,7 @@
 // 보고서와 인사 기록. 끝낸 일 기록(book.log)으로 기간별 부서 실적을 내고, 직원 명부와 한 명의 인사카드를 만든다.
 // 시간대를 모르므로 기간은 "지금부터 거슬러" 잰다(오늘 = 최근 24시간, 이번 주 = 최근 7일). 순수 함수만 둔다.
-import type { Employee, HrBook, JobRecord, OfficeAgent, Retiree } from '../types'
-import { bonusOf, CHECK_PENALTY, DEPT_INFO, DEPTS, gradeOf, isMuted, LEAD_ALLOWANCE, leadOf, lessonKey, lessonsFor, RANKS, rankOf, REWORK_PENALTY, salaryOf, tipOf } from './hr'
+import type { BossRating, Employee, HrBook, JobRecord, OfficeAgent, Retiree } from '../types'
+import { BOSS_RATE_POINTS, bonusOf, CHECK_PENALTY, DEPT_INFO, DEPTS, gradeOf, isMuted, LEAD_ALLOWANCE, leadOf, lessonKey, lessonsFor, RANKS, rankOf, REWORK_PENALTY, salaryOf, tipOf } from './hr'
 import { REJECT_PENALTY } from './approval'
 import { CONTROL_EVERY, effectText } from './trial'
 import { accuracyBlocks } from './org'
@@ -52,6 +52,7 @@ export function agoText(at: number, now: number): string {
 }
 
 const OUTCOME_KO: Record<JobRecord['outcome'], string> = { done: '완료', failed: '실패', killed: '중단' }
+const BOSS_KO: Record<BossRating | 'none', string> = { good: '좋음', bad: '아쉬움', none: '-' }
 
 /** 기록 한 건의 흠(없으면 빈 목록) */
 const flawsOf = (r: JobRecord): string[] => [
@@ -60,6 +61,7 @@ const flawsOf = (r: JobRecord): string[] => [
   ...(r.isReworked ? ['재작업'] : []),
   ...(r.alarms > 0 ? [`근태 알림 ${r.alarms}`] : []),
   ...(r.approval === 'rejected' ? [r.isWaived === true ? '결재 반려(감점 유예)' : '결재 반려'] : []),
+  ...(r.bossRating === 'bad' ? ['대표 아쉬움'] : []),
 ]
 
 /** 그 일의 인건비(원): 그때 연봉(예전 기록이면 지금 연봉)을 시급으로 환산해 걸린 시간을 곱한다 */
@@ -107,7 +109,7 @@ export function reportBlocks(book: HrBook, period: Period, now: number, agents: 
     if (mine.length === 0) return []
     const sum = (f: (r: JobRecord) => number) => mine.reduce((s, r) => s + f(r), 0)
     const done = sum(r => (r.outcome === 'done' ? 1 : 0))
-    const counts: [string, number][] = [['재작업', sum(r => (r.isReworked ? 1 : 0))], ['테스트 실패 완료', sum(r => (r.isCheckFailed ? 1 : 0))], ['근태 알림', sum(r => r.alarms)], ['결재 반려', sum(r => (r.approval === 'rejected' ? 1 : 0))]]
+    const counts: [string, number][] = [['재작업', sum(r => (r.isReworked ? 1 : 0))], ['테스트 실패 완료', sum(r => (r.isCheckFailed ? 1 : 0))], ['근태 알림', sum(r => r.alarms)], ['결재 반려', sum(r => (r.approval === 'rejected' ? 1 : 0))], ['대표 좋음', sum(r => (r.bossRating === 'good' ? 1 : 0))], ['대표 아쉬움', sum(r => (r.bossRating === 'bad' ? 1 : 0))]]
     const spent = sumTokens(mine.flatMap(r => [r.tokens, r.reviewTokens]))
     return [[
       DEPT_INFO[d].ko, `${mine.length}`, `${done}/${mine.length - done}`, `${pctOf(done, mine.length)}%`, gradeText(avgOf(mine.map(r => r.score))), `${sum(r => r.errors)}`,
@@ -187,10 +189,10 @@ export function cardBlocks(book: HrBook, e: Employee | Retiree, now: number): Bl
   if (e.tokens !== undefined && totalOf(e.tokens) > 0) out.push({ t: 'field', label: '토큰 누적', value: `${tokenDetail(e.tokens)}${counted > 0 ? ` · 한 건 평균 ${tokenText(totalOf(e.tokens) / counted)}` : ''}` })
   const recent = book.log.filter(r => r.nick === e.nick).slice(0, 5)
   if (recent.length > 0) {
-    out.push({ t: 'gap' }, { t: 'section', text: '최근 업무' }, { t: 'table', head: ['언제', '업무', '결과', '평가', '걸린 시간', '오류', '토큰', '살펴볼 것'],
-      align: ['l', 'l', 'l', 'l', 'r', 'r', 'r', 'l'], max: [undefined, DESC_MAX], rows: recent.map(r => [
-        agoText(r.endedAt, now), r.description || '(설명 없음)', OUTCOME_KO[r.outcome], `${gradeOf(r.score)}(${signed(r.score)})`, durationText(r.endedAt - r.startedAt),
-        `${r.errors}`, r.tokens !== undefined && totalOf(r.tokens) > 0 ? useText(r.tokens) : '-', flawsOf(r).filter(f => f !== OUTCOME_KO[r.outcome]).join(' · '),
+    out.push({ t: 'gap' }, { t: 'section', text: '최근 업무' }, { t: 'table', head: ['언제', '업무', '결과', '평가', '대표', '걸린 시간', '오류', '토큰', '살펴볼 것'],
+      align: ['l', 'l', 'l', 'l', 'l', 'r', 'r', 'r', 'l'], max: [undefined, DESC_MAX], rows: recent.map(r => [
+        agoText(r.endedAt, now), r.description || '(설명 없음)', OUTCOME_KO[r.outcome], `${gradeOf(r.score)}(${signed(r.score)})`, BOSS_KO[r.bossRating ?? 'none'], durationText(r.endedAt - r.startedAt),
+        `${r.errors}`, r.tokens !== undefined && totalOf(r.tokens) > 0 ? useText(r.tokens) : '-', flawsOf(r).filter(f => f !== OUTCOME_KO[r.outcome] && f !== '대표 아쉬움').join(' · '),
       ]) })
   }
   const lessons = lessonsFor(book, e.dept, now)
@@ -246,6 +248,7 @@ export function rosterBlocks(b: HrBook, now: number): Block[] {
   }
   out.push({ t: 'gap' }, { t: 'section', text: '제도' },
     { t: 'bullet', text: `평가: 완료 +10, 실패 -5(중단 -3), 도구 오류 1개당 -1(최대 -5), 오류 없이 완료 +3, 테스트·빌드 실패한 채 완료 -${CHECK_PENALTY}, 끝낸 뒤 BOSS가 같은 파일을 다시 고치면 재작업 -${REWORK_PENALTY}, 결재 반려 -${REJECT_PENALTY}` },
+    { t: 'bullet', text: `대표 평가: 끝낸 일에 좋음 +${BOSS_RATE_POINTS} · 아쉬움 -${BOSS_RATE_POINTS}(메뉴의 인사카드, /office rate <별칭> good|bad|clear). 결재 정확도(승인+아쉬움은 놓친 승인, 반려+좋음은 빗나간 반려)와 적임자 배정에도 쓴다. 떠난 직원은 평가하지 않는다` },
     { t: 'bullet', text: '직급: 사원 0 · 대리 20 · 과장 60 · 차장 120 · 부장 200(경력, 감점이면 깎여 강등). 평균 평가는 최근 일에 무게를 둡니다' },
     { t: 'bullet', text: `예산: ${DEPTS.some(d => b.budgets[d] !== undefined) ? DEPTS.flatMap(d => (b.budgets[d] === undefined ? [] : [`${DEPT_INFO[d].ko} 하루 ${usdText(b.budgets[d] ?? 0)}`])).join(' · ') : '없음'}(넘으면 하루 한 번 알림, /office budget <부서> <달러>|off)` },
     { t: 'bullet', text: '배정: 쉬고 있는 부서 직원 중 비슷한 일을 잘 끝낸 사람·평균 평가가 높은 사람에게 맡깁니다' },

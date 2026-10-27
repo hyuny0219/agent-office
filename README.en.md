@@ -37,6 +37,7 @@ In the desktop app, where `/plugin` does not run: click + next to the prompt box
 | --- | --- |
 | `/office` | Open the office floor plan pane |
 | `/office menu` | Open the office menu pane: roster, daily/weekly reports, budget and settings as tables |
+| `/office rate <nick> good\|bad\|clear` | Rate (or clear the rating of) that employee's most recent finished job as the boss (good +3 · bad -3) |
 | `/office hr` | HR records: staff, rank, salary, latest review, done/failed, tool errors, reworks and attendance alerts by department, plus each department's repeated mistakes |
 | `/office hr <nick>` | One employee's personnel card: rank and experience to the next rank, salary breakdown, record, token total, last 5 jobs, the department's repeated mistakes (`bear` or the Korean name both work, former employees too) |
 | `/office approval on` / `off` | Turn approvals on or off (on by default): team leads sign off finished jobs' reports, and the planning lead reviews confirmed plans |
@@ -111,6 +112,13 @@ Review criteria: finish the task, keep tool errors down, don't finish with a fai
 The repeated mistakes are subagents' tool error messages, grouped and counted by department (paths and numbers removed). Only those seen at least twice are added, most recent first, three at most. Mistakes not seen again for two weeks are left out.
 Turn it off with `/office hr off`. Reviews and salaries keep being recorded either way.
 
+
+### Boss ratings
+
+You (the boss) can rate a finished job `good` (+3) or `bad` (-3): with the buttons next to each recent job on a personnel card in the menu pane (press the same one again to clear it), or with `/office rate <nick> good|bad|clear` for the most recent job. Changing a rating adjusts that job's score, the employee's experience and average by the difference; clearing it restores them. As the most direct signal of quality, ratings feed other systems too:
+- Approval accuracy: an approved job rated bad counts as a missed approval, a rejected job rated good as a wrong rejection (checked before file follow-ups).
+- Assignment: a job rated bad doesn't count as "a similar job done well".
+- Reports and cards: shown in the per-department table, jobs to look at, and the `boss` column of recent jobs.
 
 ### Approvals
 

@@ -9,12 +9,23 @@ import { CONTROL_EVERY } from './trial'
 import { agentsOf, hrOf, saveHr } from './store'
 import { budgetLines, deptNamed, dollarsOf } from './budget'
 import { usdText } from './tokens'
-import { DEPT_INFO, DEPTS } from './hr'
+import { BOSS_RATE_POINTS, DEPT_INFO, DEPTS, rate } from './hr'
+
+/** 평가로 직급이 바뀌었으면 한마디 */
+export const rankChangeText = (m: { promotedTo: string | null; demotedTo: string | null } | null): string =>
+  m === null ? '' : m.promotedTo !== null ? ` (${withRo(m.promotedTo)} 승진)` : m.demotedTo !== null ? ` (${withRo(m.demotedTo)} 강등)` : ''
+
+/** '대리로', '사원으로': 받침이 있으면(ㄹ 받침은 빼고) 으로 */
+const withRo = (word: string): string => {
+  const c = word.charCodeAt(word.length - 1) - 0xac00
+  const jong = c >= 0 && c <= 11171 ? c % 28 : 0
+  return `${word}${jong !== 0 && jong !== 8 ? '으로' : '로'}`
+}
 
 export const COMMAND = {
   name: 'office',
-  description: '에이전트 사무실 평면도 보기. menu: 메뉴 화면(인사 명부·보고서·예산·설정을 표로), budget [<부서> <달러>|<부서> off]: 부서별 하루 비용 한도, approval on|off: 보고·계획 결재 켜고 끄기, reorg on|off: 조직 개편(권고사직·계약 종료) 켜고 끄기, report [today|week]: 일간·주간 보고, hr: 인사 기록(부서·직급·연봉·평가), hr <별칭>: 인사카드, hr on|off: 업무 지시 인사 메모 켜고 끄기, hr ab on|off: 교육 효과 측정(비교군) 켜고 끄기',
-  argumentHint: '[menu | budget [<부서> <달러>|<부서> off] | approval on|off | reorg on|off | report [today|week] | hr [<별칭>|on|off|ab on|off]]',
+  description: '에이전트 사무실 평면도 보기. menu: 메뉴 화면(인사 명부·보고서·예산·설정을 표로), rate <별칭> good|bad|clear: 최근 끝낸 일에 대표 평가, budget [<부서> <달러>|<부서> off]: 부서별 하루 비용 한도, approval on|off: 보고·계획 결재 켜고 끄기, reorg on|off: 조직 개편(권고사직·계약 종료) 켜고 끄기, report [today|week]: 일간·주간 보고, hr: 인사 기록(부서·직급·연봉·평가), hr <별칭>: 인사카드, hr on|off: 업무 지시 인사 메모 켜고 끄기, hr ab on|off: 교육 효과 측정(비교군) 켜고 끄기',
+  argumentHint: '[menu | rate <별칭> good|bad|clear | budget [<부서> <달러>|<부서> off] | approval on|off | reorg on|off | report [today|week] | hr [<별칭>|on|off|ab on|off]]',
 }
 
 /** 글로 답할 하위 명령이면 그 답, 패널을 열 명령이면 null */
@@ -58,6 +69,24 @@ export async function answer($: EngineInterface, args: string): Promise<string |
       return { ...b, budgets: { ...b.budgets, [dept]: dollars }, budgetNotices }
     })
     return `${DEPT_INFO[dept].ko} 하루 예산을 ${usdText(dollars)}로 정합니다. 최근 24시간 비용(모델 API 정가로 어림)이 넘으면 하루 한 번 알립니다.`
+  }
+  if (sub === 'rate') {
+    const use = '쓰는 법: /office rate <별칭> good|bad|clear (그 직원이 가장 최근에 끝낸 일에 대표 평가: 좋음 +' + BOSS_RATE_POINTS + ' · 아쉬움 -' + BOSS_RATE_POINTS + ')'
+    const want = arg2?.toLowerCase()
+    if (arg === undefined || arg === '' || (want !== 'good' && want !== 'bad' && want !== 'clear')) return use
+    const b = await hrOf($)
+    const who = findEmployee(b, arg)
+    if (who === undefined) return `${arg}라는 직원이 없습니다. /office hr로 명부를 보세요.`
+    if (!b.employees.some(e => e.nick === who.nick)) return `${who.nick}는 떠난 직원이라 평가할 수 없습니다.`
+    const last = b.log.filter(r => r.nick === who.nick).sort((x, y) => y.job - x.job)[0]
+    if (last === undefined) return `${who.nick}는 아직 끝낸 일이 없습니다.`
+    let moved: ReturnType<typeof rate> | null = null
+    await saveHr($, x => {
+      moved = rate(x, who.nick, last.job, want === 'clear' ? null : want)
+      return moved.book
+    })
+    const said = want === 'clear' ? `${who.nick} "${last.description}"의 대표 평가를 거둡니다.` : `${who.nick} "${last.description}"에 대표 평가 ${want === 'good' ? `좋음(+${BOSS_RATE_POINTS})` : `아쉬움(-${BOSS_RATE_POINTS})`}을 줍니다.`
+    return `${said}${rankChangeText(moved)}`
   }
   if (sub === 'report') {
     const want = arg?.toLowerCase()

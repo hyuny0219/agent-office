@@ -10,7 +10,7 @@ import { activityOf, layoutOf } from './scene'
 import { answer, COMMAND } from './commands'
 import { awaitApproval, checkBudget, checkFollowUp, checkRework, EDIT_TOOLS, fileOf, isCheckCommand, papers, reorganize, reviewPlan, syncStatus, takeNotes, watch } from './flow'
 import { usageOf } from './tokens'
-import { cardView, flip, MENU, MENU_PANE, MENU_TITLE, nickOfView, TOGGLES, viewBlocks } from './menu'
+import { cardView, flip, MENU, MENU_PANE, MENU_TITLE, nickOfView, ratableOf, rateJob, TOGGLES, viewBlocks } from './menu'
 import { mdOf } from './table'
 import { isShell } from './watch'
 import { admit, agentsOf, chargeAgent, readMenuView, setMenuView, ensure, fresh, hold, hrOf, MEET_MS, meet, nickOfId, patch, readFeed, release, save, saveHr, speak, staff, watchAgents } from './store'
@@ -304,6 +304,18 @@ export const register: Register = (on, options) => {
             <Text dimColor>인사카드:</Text>
             {b.employees.map(x => <Button key={`card-${x.nick}`} plain onPress={go(cardView(x.nick))}>{x.nick}</Button>)}
             {b.retired.slice(0, 5).map(x => <Button key={`card-${x.nick}`} plain dimColor onPress={go(cardView(x.nick))}>{`${x.nick}(퇴사)`}</Button>)}
+          </Box>
+        )}
+        {card !== null && ratableOf(b, card).length > 0 && (
+          <Box marginTop={1} flexDirection="column">
+            <Text dimColor>대표 평가(같은 것을 다시 누르면 거둠):</Text>
+            {ratableOf(b, card).map(r => (
+              <Box key={`rate-${r.job}`} columnGap={2}>
+                <Button key={`rate-good-${r.job}`} plain dimColor={r.bossRating !== 'good'} onPress={() => rateJob($, card, r.job, 'good').catch(() => undefined)}>{r.bossRating === 'good' ? '[좋음]' : '좋음'}</Button>
+                <Button key={`rate-bad-${r.job}`} plain dimColor={r.bossRating !== 'bad'} onPress={() => rateJob($, card, r.job, 'bad').catch(() => undefined)}>{r.bossRating === 'bad' ? '[아쉬움]' : '아쉬움'}</Button>
+                <Text wrap="truncate-end">{r.description || '(설명 없음)'}</Text>
+              </Box>
+            ))}
           </Box>
         )}
         {card !== null && (

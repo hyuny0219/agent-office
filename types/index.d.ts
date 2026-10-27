@@ -173,7 +173,14 @@ export type JobRecord = {
   tokens?: TokenUse
   /** 결재자가 그 일을 결재하며 쓴 토큰 */
   reviewTokens?: TokenUse
+  /** 대표(사용자)가 준 평가: 좋음·아쉬움(평가 점수와 결재 정확도에 반영) */
+  bossRating?: BossRating
+  /** 대표 평가로 실제로 바뀐 경력(0 아래로는 잘리므로 점수와 다를 수 있다): 거둘 때 이만큼 되돌린다 */
+  bossXp?: number
 }
+
+/** 대표 평가 */
+export type BossRating = 'good' | 'bad'
 
 /** 회사를 떠난 직원: 그때의 인사 기록과 떠난 때·까닭 */
 export type Retiree = Employee & { retiredAt: number; reason: string }

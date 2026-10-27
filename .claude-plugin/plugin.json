@@ -1,6 +1,6 @@
 {
   "name": "agent-office",
-  "version": "0.16.0",
+  "version": "0.17.0",
   "description": "서브에이전트들이 일하는 모습을 게임 속 사무실 평면도로 보여 주고(/office), 부서·직급·연봉·평가 인사 제도로 반복 실수를 다음 업무 지시에 알려 주는 Claude Code mod",
   "author": {
     "name": "hyuny0219"

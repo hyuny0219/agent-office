@@ -1,7 +1,7 @@
 // 인사 제도. 에이전트 종류로 부서를 정하고, 같은 부서 직원(별칭)이 일을 맡을 때마다 경력이 쌓인다.
 // 평가는 실제 기록(완료·실패·도구 오류·거절)으로만 매기고, 부서가 반복한 실수는 "교훈"으로 모아
 // 다음에 그 부서 직원이 일을 맡을 때 업무 지시 끝에 짧은 인사 메모로 붙인다. 순수 함수만 둔다.
-import type { Approval, Dept, Employee, Handoff, HrBook, JobRecord, Lesson, Retiree } from '../types'
+import type { BossRating, Approval, Dept, Employee, Handoff, HrBook, JobRecord, Lesson, Retiree } from '../types'
 import { tokensOf } from './tokens'
 
 export const DEPTS: Dept[] = ['dev', 'research', 'qa', 'plan', 'docs', 'ops']
@@ -138,14 +138,15 @@ export function migrate(stored: unknown): HrBook | null {
     typeof x?.nick === 'string' && isNum(x.job) && isNum(x.startedAt) && isNum(x.endedAt) && isNum(x.score)
     && (x.outcome === 'done' || x.outcome === 'failed' || x.outcome === 'killed'))
     .map(x => {
-      const { salary, approval, approver, files, isFollowedUp, isWaived, tokens, reviewTokens, ...rest } = x
+      const { salary, approval, approver, files, isFollowedUp, isWaived, tokens, reviewTokens, bossRating, ...rest } = x
       const used = tokensOf(tokens)
       const reviewed = tokensOf(reviewTokens)
       const isApproval = approval === 'approved' || approval === 'rejected' || approval === 'exempt'
       return { ...rest, ...(isApproval ? { approval } : {}), dept: isDept(x.dept) ? x.dept : 'ops', description: typeof x.description === 'string' ? x.description : '', errors: num(x.errors, 0),
         isCheckFailed: x.isCheckFailed === true, isReworked: x.isReworked === true, alarms: num(x.alarms, 0), ...(isNum(salary) ? { salary } : {}),
         ...(typeof approver === 'string' ? { approver } : {}), ...(isNum(files) ? { files } : {}), ...(isFollowedUp === true ? { isFollowedUp } : {}), ...(isWaived === true ? { isWaived } : {}),
-        ...(used === undefined ? {} : { tokens: used }), ...(reviewed === undefined ? {} : { reviewTokens: reviewed }) }
+        ...(used === undefined ? {} : { tokens: used }), ...(reviewed === undefined ? {} : { reviewTokens: reviewed }),
+        ...(bossRating === 'good' || bossRating === 'bad' ? { bossRating, ...(isNum(x.bossXp) ? { bossXp: x.bossXp } : {}) } : {}) }
     })
     .slice(0, MAX_LOG)
   return {
@@ -238,6 +239,31 @@ function dock(book: HrBook, nick: string, job: number, amount: number, mark: (e:
   })
   const log = moved.book.log.map(r => (r.nick === nick && r.job === job ? markLog({ ...r, score: r.score - amount }) : r))
   return { ...moved, book: { ...moved.book, log } }
+}
+
+/** 대표 평가 한 번이 더하거나 빼는 점수 */
+export const BOSS_RATE_POINTS = 3
+const ratePoints = (r: BossRating | undefined): number => (r === 'good' ? BOSS_RATE_POINTS : r === 'bad' ? -BOSS_RATE_POINTS : 0)
+
+/**
+ * 대표가 끝낸 일 한 건(그 직원의 job번째 일)에 평가를 준다(null이면 거둔다). 전에 준 평가와의 차이만큼
+ * 경력·최근 평가·평균·그 일의 점수를 고친다. 그 일이 없으면 그대로
+ */
+export function rate(book: HrBook, nick: string, job: number, rating: BossRating | null): Moved {
+  const r = book.log.find(x => x.nick === nick && x.job === job)
+  const e = book.employees.find(x => x.nick === nick)
+  // 떠난 직원의 일은 평가하지 않는다(인사 기록은 떠난 때 그대로 둔다)
+  if (r === undefined || e === undefined) return { book, promotedTo: null, demotedTo: null }
+  const delta = ratePoints(rating ?? undefined) - ratePoints(r.bossRating)
+  // 경력은 지난 평가로 실제로 바뀐 만큼 먼저 되돌리고 새 평가를 0 아래로 자르며 더한다(주고 거두기를 되풀이해도 경력이 붙지 않도록)
+  const baseXp = e.xp - (r.bossXp ?? 0)
+  const xp = Math.max(0, baseXp + ratePoints(rating ?? undefined))
+  const markLog = (x: JobRecord): JobRecord => {
+    const { bossRating: _was, bossXp: _xp, ...rest } = x
+    return rating === null ? rest : { ...rest, bossRating: rating, bossXp: xp - baseXp }
+  }
+  // 점수·최근 평가·평균은 깎는 함수에 거꾸로 넣어 더한다(좋음이면 +3), 경력은 위에서 잰 값으로
+  return dock(book, nick, job, -delta, x => ({ ...x, xp }), markLog)
 }
 
 /** 결재 결과(와 결재자)를 그 일의 기록에 적고, 반려면 깎는다(감점 0이면 유예한 반려로 적는다) */

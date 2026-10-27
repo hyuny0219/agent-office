@@ -3,7 +3,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import type { HrBook, JobRecord, OfficeAgent } from '../types'
-import { briefOf, decide, deptOf, emptyBook, gradeOf, handOff, hire, isMuted, leadOf, learn, LESSON_TTL_MS, lessonKey, migrate, RETEST_MS, patternOf, rankOf, review, rework, REWORK_MS, salaryOf, scoreOf, tipOf } from './hr'
+import { briefOf, decide, deptOf, emptyBook, gradeOf, handOff, hire, isMuted, leadOf, learn, LESSON_TTL_MS, lessonKey, migrate, RETEST_MS, patternOf, rankOf, rate, review, rework, REWORK_MS, salaryOf, scoreOf, tipOf } from './hr'
 import { decisionOf, decisionToast, evidenceOf, EXEMPT_XP, MIN_TOOLS, planReviewOf, rejectNoteOf, requestOf, routeOf } from './approval'
 import { asciiOf, BUBBLE_MS, checkRunOf, commandNameOf, isSpeaking, lineText, messageOf, oopsOf, orderOf, pushLine, FEED_MAX, selfTalkOf } from './speech'
 import { agoText, cardOf, durationText, findEmployee, jobsIn, reportOf } from './report'
@@ -11,11 +11,12 @@ import { CONTROL_EVERY, effectText, enroll, markHit, MIN_CONTROL, MIN_MEMO, sett
 import { callKeyOf, errorKeyOf, isAlarm, isOvertime, isPolling, nudgeOf, OVERTIME_MS, stepOf } from './watch'
 import { fitParts, rowsOf, widthOf } from './view'
 import { mdOf, tableLines, textOf } from './table'
+import { rankChangeText } from './commands'
 import { isCheckCommand } from './flow'
 import { activityOf, encodeCells, koNick, layoutOf, nickFor, Office, PLAN_ROWS } from './scene'
 import { addTokens, chargeReview, costText, modelLabel, priceOf, tokenDetail, tokensOf, tokenText, totalOf, usageOf, usdText } from './tokens'
 import { BUDGET_MS, budgetLines, deptNamed, dollarsOf, noticed, overrunsOf, spentOf } from './budget'
-import { accuracyBlocks, accuracyOf, FOLLOW_MS, followUp, IDLE_MS, isRejectTrusted, isSimilar, judgeOf, pickFor, reinstate, reorgOf } from './org'
+import { accuracyBlocks, accuracyOf, fitOf, FOLLOW_MS, followUp, IDLE_MS, isRejectTrusted, isSimilar, judgeOf, pickFor, reinstate, reorgOf } from './org'
 
 const agent = (id: string, over: Partial<OfficeAgent> = {}): OfficeAgent => ({
   id, type: 'builder', nick: 'BEAR', dept: 'dev', description: '빌드', model: null, startedAt: 0, endedAt: null, activity: 'type', tool: 'Edit', tools: 3, ...over,
@@ -293,7 +294,7 @@ test('보고서·인사카드: 기간 안 일만 모아 부서별 실적·MVP·�
   expect(card).toContain('대리까지')
   expect(card).toContain('+ 팀장 수당 600')
   expect(card).toContain('■ 최근 업무')
-  expect(card).toContain('30분 전  고치기  완료  D(-1)        30분     3     -  테스트·빌드 실패한 채 완료 · 재작업 · 근태 알림 1')
+  expect(card).toContain('30분 전  고치기  완료  D(-1)   -          30분     3     -  테스트·빌드 실패한 채 완료 · 재작업 · 근태 알림 1')
   expect(card).not.toContain('조사')
   expect(cardOf(b, findEmployee(b, 'OWL') as never, now)).toContain('아직 끝낸 업무가 없습니다')
 
@@ -1463,4 +1464,110 @@ test('문서 블록: 같은 내용을 글(칸 맞춘 표)과 마크다운(표·�
   expect(mdOf([{ t: 'table', head: ['업무', '수'], rows: [['아주 긴 업무 설명입니다\n둘째', ''], ['짧음']], align: ['l', 'r'], max: [10] }]))
     .toBe('| 업무 | 수 |\n| --- | ---: |\n| 아주 긴… |  |\n| 짧음 |  |')
   expect(mdOf([{ t: 'line', text: '- 줄' }, { t: 'bullet', text: '항목' }])).toBe('\\- 줄\n\n- 항목')
+})
+
+test('대표 평가: 좋음 +3·아쉬움 -3을 점수·경력·평균에 반영하고, 바꾸면 차이만큼, 거두면 되돌리며, 결재 정확도와 적임자 배정에 쓴다', () => {
+  let b = hire(emptyBook(), 'BEAR', 'dev', 'builder', 0).book
+  b = review(b, 'BEAR', { isDone: true, isKilled: false, errors: 0, tools: 5, isCheckFailed: false }, 1000).book
+  const rec: JobRecord = { nick: 'BEAR', dept: 'dev', job: 1, description: '빌드 고치기', startedAt: 0, endedAt: 1000, outcome: 'done', score: 13, errors: 0, isCheckFailed: false, isReworked: false, alarms: 0, approval: 'approved', approver: 'BOSS' }
+  b = { ...b, log: [rec] }
+  const xp0 = b.employees[0]?.xp ?? 0
+  const good = rate(b, 'BEAR', 1, 'good').book
+  expect([good.log[0]?.score, good.log[0]?.bossRating, good.employees[0]?.xp]).toEqual([16, 'good', xp0 + 3])
+  // 좋음 → 아쉬움은 -6, 거두면 처음으로
+  const bad = rate(good, 'BEAR', 1, 'bad').book
+  expect([bad.log[0]?.score, bad.log[0]?.bossRating, bad.employees[0]?.xp]).toEqual([10, 'bad', xp0 - 3])
+  const cleared = rate(bad, 'BEAR', 1, null).book
+  expect([cleared.log[0]?.score, 'bossRating' in (cleared.log[0] ?? {}), cleared.employees[0]?.xp]).toEqual([13, false, xp0])
+  expect(Math.abs((cleared.employees[0]?.avgScore ?? 0) - (b.employees[0]?.avgScore ?? 0)) < 1e-9).toBe(true)
+  // 없는 일은 그대로
+  expect(rate(b, 'BEAR', 9, 'good').book).toBe(b)
+  // 결재 정확도: 승인한 일에 아쉬움이면 놓친 승인, 반려한 일에 좋음이면 빗나간 반려(파일을 안 고친 일도, 지켜보는 중이어도)
+  expect(judgeOf({ ...rec, bossRating: 'bad' }, 1000)).toBe('missed')
+  expect(judgeOf({ ...rec, bossRating: 'good' }, 1000)).toBe('right-approve')
+  expect(judgeOf({ ...rec, approval: 'rejected', bossRating: 'good' }, 1000)).toBe('doubtful')
+  expect(judgeOf({ ...rec, approval: 'rejected', bossRating: 'bad' }, 1000)).toBe('right-reject')
+  expect(judgeOf(rec, 1000)).toBeNull()
+  // 적임자 배정: 아쉬움 받은 일은 잘 끝낸 일이 아니다
+  expect(fitOf(b, b.employees[0]!, '빌드 고치기').similar).toBe(1)
+  expect(fitOf(bad, bad.employees[0]!, '빌드 고치기').slips).toBe(1)
+  // 보고서·인사카드에 보인다
+  expect(reportOf(bad, 'today', 2000)).toContain('대표 아쉬움 1')
+  expect(cardOf(bad, bad.employees[0]!, 2000)).toMatch(/빌드 고치기\s+완료\s+A\(\+10\)\s+아쉬움/)
+  // 저장했다 읽어도 남는다
+  expect(migrate(JSON.parse(JSON.stringify(bad))).log[0]?.bossRating).toBe('bad')
+})
+
+test('대표 평가: /office rate로 최근 일에 주고, 메뉴 화면의 인사카드 버튼으로 주고 거둔다', async ($, on) => {
+  const store = new Map<string, unknown>()
+  let b = hire(emptyBook(), 'BEAR', 'dev', 'builder', 0).book
+  b = review(b, 'BEAR', { isDone: true, isKilled: false, errors: 0, tools: 5, isCheckFailed: false }, 1000).book
+  b = { ...b, log: [{ nick: 'BEAR', dept: 'dev', job: 1, description: '빌드 고치기', startedAt: 0, endedAt: 1000, outcome: 'done', score: 13, errors: 0, isCheckFailed: false, isReworked: false, alarms: 0 }] }
+  store.set('hr', b)
+  on('store.get', (_$, e) => ({ value: store.get(e.key) }))
+  on('store.set', (_$, e) => {
+    store.set(e.key, e.value)
+    return { value: undefined }
+  })
+  on('clock.now', () => ({ value: 5000 }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  const run = async (args: string) => String((await $.command.run({ command: 'office', args, ...RUN }) as { text?: string }).text ?? '')
+  expect(await run('rate')).toContain('쓰는 법')
+  expect(await run('rate NOBODY good')).toContain('직원이 없습니다')
+  expect(await run('rate bear good')).toBe('BEAR "빌드 고치기"에 대표 평가 좋음(+3)을 줍니다.')
+  expect(await run('hr bear')).toMatch(/빌드 고치기\s+완료\s+S\(\+16\)\s+좋음/)
+  expect(await run('rate 곰 clear')).toContain('거둡니다')
+  expect(await run('hr bear')).toMatch(/빌드 고치기\s+완료\s+S\(\+13\)\s+-/)
+
+  const menu = await $.ui.mount({ plugin: 'agent-office', surface: 'terminal', component: 'Pane', requestId: 'agent-office-menu', props: { ...PROPS, title: '사무실 메뉴' }, viewport: { columns: 96, rows: 50 } })
+  await menu.press({ key: 'card-BEAR' })
+  expect((await menu.find({ key: 'rate-bad-1' }))?.text).toBe('아쉬움')
+  await menu.press({ key: 'rate-bad-1' })
+  expect((await menu.find({ key: 'rate-bad-1' }))?.text).toBe('[아쉬움]')
+  expect(await run('hr bear')).toMatch(/빌드 고치기\s+완료\s+A\(\+10\)\s+아쉬움/)
+  // 같은 것을 다시 누르면 거둔다
+  await menu.press({ key: 'rate-bad-1' })
+  expect((await menu.find({ key: 'rate-bad-1' }))?.text).toBe('아쉬움')
+  expect(await run('hr bear')).toMatch(/빌드 고치기\s+완료\s+S\(\+13\)\s+-/)
+})
+
+test('대표 평가 경계: 경력이 0 근처여도 주고 거두면 원래 경력으로, 떠난 직원은 평가하지 않고, 이상한 값은 읽지 않으며, 결재자 신뢰에 반영된다', async ($, on) => {
+  // 경력 1인 직원: 아쉬움(-3)은 0에서 멈추고, 거두면 1로 돌아온다(공짜 경력 없음)
+  let b = hire(emptyBook(), 'BEAR', 'dev', 'builder', 0).book
+  b = { ...b, employees: b.employees.map(e => ({ ...e, xp: 1, jobs: 1, lastScore: 1, avgScore: 1 })),
+    log: [{ nick: 'BEAR', dept: 'dev', job: 1, description: '일', startedAt: 0, endedAt: 1, outcome: 'done', score: 1, errors: 0, isCheckFailed: false, isReworked: false, alarms: 0 }] }
+  const bad = rate(b, 'BEAR', 1, 'bad').book
+  expect([bad.employees[0]?.xp, bad.log[0]?.bossXp]).toEqual([0, -1])
+  expect(rate(bad, 'BEAR', 1, null).book.employees[0]?.xp).toBe(1)
+  // 아쉬움 → 좋음 → 거두기 왕복도 그대로
+  const good = rate(bad, 'BEAR', 1, 'good').book
+  expect([good.employees[0]?.xp, good.log[0]?.bossXp]).toEqual([4, 3])
+  expect(rate(good, 'BEAR', 1, null).book.employees[0]?.xp).toBe(1)
+  // 떠난 직원은 그대로
+  const gone = { ...b, employees: [], retired: [{ ...b.employees[0]!, retiredAt: 2, reason: '계약 종료' }] }
+  expect(rate(gone, 'BEAR', 1, 'good').book).toBe(gone)
+  // 이상한 값은 읽지 않는다
+  expect(migrate(JSON.parse(JSON.stringify({ ...b, log: [{ ...b.log[0], bossRating: 'meh', bossXp: 9 }] }))).log[0]).not.toHaveProperty('bossRating')
+  // 반려에 좋음이 쌓이면(빗나간 반려 3건) 그 결재자의 반려는 감점을 유예한다
+  const rec = { nick: 'BEAR', dept: 'dev', description: '일', startedAt: 0, endedAt: 1, outcome: 'done', score: 10, errors: 0, isCheckFailed: false, isReworked: false, alarms: 0, approval: 'rejected', approver: 'OWL' } as const
+  const judged = { ...b, log: [1, 2, 3].map(job => ({ ...rec, job, bossRating: 'good' as const })) }
+  expect(isRejectTrusted({ ...b, log: [1, 2, 3].map(job => ({ ...rec, job })) }, 'OWL', 2)).toBe(true)
+  expect(isRejectTrusted(judged, 'OWL', 2)).toBe(false)
+
+  // 명령: 떠난 직원은 거절, 승진하면 알린다
+  const store = new Map<string, unknown>([['hr', gone]])
+  on('store.get', (_$, e) => ({ value: store.get(e.key) }))
+  on('store.set', (_$, e) => {
+    store.set(e.key, e.value)
+    return { value: undefined }
+  })
+  on('clock.now', () => ({ value: 5000 }))
+  const run = async (args: string) => String((await $.command.run({ command: 'office', args, ...RUN }) as { text?: string }).text ?? '')
+  expect(await run('rate bear good')).toBe('BEAR는 떠난 직원이라 평가할 수 없습니다.')
+  // 승진하면 알린다(대리 20)
+  const near = { ...b, employees: b.employees.map(e => ({ ...e, xp: 18 })) }
+  const up = rate(near, 'BEAR', 1, 'good')
+  expect(up.promotedTo).toBe('대리')
+  expect(rankChangeText(up)).toBe(' (대리로 승진)')
+  expect(rankChangeText(rate(up.book, 'BEAR', 1, null))).toBe(' (사원으로 강등)')
 })

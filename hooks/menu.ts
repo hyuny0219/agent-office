@@ -2,7 +2,9 @@
 // 무엇을 보고 있는지는 상태(menuView)에 둔다. 여기에는 메뉴 목록과 화면별 내용(블록)만 둔다.
 import type { EngineInterface } from 'claude-code'
 
-import type { HrBook } from '../types'
+import type { BossRating, HrBook, JobRecord } from '../types'
+import { rate } from './hr'
+import { rankChangeText } from './commands'
 import { budgetBlocks } from './budget'
 import { cardBlocks, findEmployee, reportBlocks, rosterBlocks } from './report'
 import type { Block } from './table'
@@ -42,6 +44,23 @@ export async function flip($: EngineInterface, key: string) {
   } finally {
     $.ui.invalidate('ui.render')
   }
+}
+
+/** 인사카드에서 평가 버튼을 다는 최근 업무(카드의 최근 업무 표와 같은 다섯 건, 떠난 직원은 없음) */
+export const ratableOf = (b: HrBook, nick: string): JobRecord[] =>
+  b.employees.some(e => e.nick === nick) ? b.log.filter(r => r.nick === nick).slice(0, 5) : []
+
+/** 대표 평가 버튼: 같은 평가를 다시 누르면 거둔다 */
+export async function rateJob($: EngineInterface, nick: string, job: number, rating: BossRating) {
+  let moved: ReturnType<typeof rate> | null = null
+  await saveHr($, b => {
+    const was = b.log.find(r => r.nick === nick && r.job === job)?.bossRating
+    moved = rate(b, nick, job, was === rating ? null : rating)
+    return moved.book
+  })
+  const change = rankChangeText(moved)
+  if (change !== '') $.ui.toast(`${nick}${change}`)
+  $.ui.invalidate('ui.render')
 }
 
 /** 그 화면의 내용. 설정 화면은 버튼으로 그리므로 설명만 */

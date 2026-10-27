@@ -28,6 +28,11 @@ export type Verdict = 'right-approve' | 'missed' | 'right-reject' | 'doubtful'
 /** 아직 잴 수 없으면 null: 결재하지 않은 일, 고친 파일이 없는 일(후속 수정으로 잴 수 없다), 지켜보는 중인 일 */
 export function judgeOf(r: JobRecord, now: number): Verdict | null {
   if (r.approval !== 'approved' && r.approval !== 'rejected') return null
+  // 대표 평가가 있으면 그것으로 잰다(파일을 고치지 않은 일도, 지켜보는 중인 일도)
+  if (r.bossRating !== undefined) {
+    if (r.approval === 'approved') return r.bossRating === 'bad' ? 'missed' : 'right-approve'
+    return r.bossRating === 'bad' ? 'right-reject' : 'doubtful'
+  }
   if ((r.files ?? 0) === 0) return null
   const isFollowed = r.isFollowedUp === true
   if (!isFollowed && now - r.endedAt <= FOLLOW_MS) return null
@@ -79,7 +84,7 @@ export function accuracyBlocks(book: HrBook, now: number): Block[] {
   const list = accuracyOf(book, now)
   if (list.length === 0) return []
   return [
-    { t: 'section', text: '결재 정확도(지금까지, 끝낸 뒤 10분 안에 다른 사람이 같은 파일을 고쳤는지로 잼)' },
+    { t: 'section', text: '결재 정확도(지금까지, 대표 평가가 있으면 그것으로, 없으면 끝낸 뒤 10분 안에 다른 사람이 같은 파일을 고쳤는지로 잼)' },
     { t: 'table', head: ['결재자', '판정', '맞음', '놓친 승인', '빗나간 반려', '비고'], align: ['l', 'r', 'r', 'r', 'r', 'l'], rows: list.map(a => [
       approverName(book, a.approver), `${a.judged}건`, `${a.right}(${pct(a.right, a.judged)}%)`, `${a.missed}`, `${a.doubtful}`,
       isRejectTrusted(book, a.approver, now) ? '' : '반려 감점 유예(반려가 자주 빗나감)',
@@ -112,8 +117,8 @@ export function isSimilar(a: string, b: string): boolean {
 
 /** 평가가 아직 없는 직원의 평균(보통 B) */
 const NEW_AVG = 6
-/** 비슷한 일을 잘 끝냈는가: 완료했고, 반려(감점을 유예한 반려는 빼고)·재작업이 없다 */
-const isClean = (r: JobRecord): boolean => r.outcome === 'done' && !(r.approval === 'rejected' && r.isWaived !== true) && !r.isReworked
+/** 비슷한 일을 잘 끝냈는가: 완료했고, 반려(감점을 유예한 반려는 빼고)·재작업·대표의 아쉬움이 없다 */
+const isClean = (r: JobRecord): boolean => r.outcome === 'done' && !(r.approval === 'rejected' && r.isWaived !== true) && !r.isReworked && r.bossRating !== 'bad'
 
 export type Fit = { employee: Employee; score: number; similar: number; slips: number }
 
