@@ -221,6 +221,8 @@ let lastTui: any = null
 
 /** 사이드바를 보이는 최소 터미널 폭 */
 const SIDE_MIN_COLUMNS = 120
+/** 평면도를 켠 사이드바의 폭(평면도 최소 72칸 + 테두리 2칸) */
+const SIDE_PLAN_COLUMNS = 74
 let side: { hide: () => void } | null = null
 /** 사이드바를 띄워 둘지(기본 꺼짐, AGENT_OFFICE_SIDE=1이면 켜고 시작). /office side로 바꾼다 */
 let isSideWanted = process.env.AGENT_OFFICE_SIDE === '1'
@@ -270,7 +272,8 @@ function openSide(): boolean {
   const comp = sideComponent(() => {
     if (editor !== null && typeof editor === 'object' && 'focused' in editor && tui.getFocused?.() === comp) editor.focused = true
   })
-  const handle = tui.showOverlay(comp, { anchor: 'top-right', width: '34%', minWidth: 44, maxHeight: '100%', visible: (w: number) => w >= SIDE_MIN_COLUMNS })
+  // 평면도를 켜 두었으면 평면도가 들어갈 만큼(평면도 최소 72칸 + 테두리) 넓힌다
+  const handle = tui.showOverlay(comp, { anchor: 'top-right', width: isPlanShown ? SIDE_PLAN_COLUMNS : '34%', minWidth: 44, maxHeight: '100%', visible: (w: number) => w >= SIDE_MIN_COLUMNS })
   if (editor !== null && typeof editor === 'object' && 'focused' in editor) editor.focused = true
   side = {
     hide: () => {
@@ -451,6 +454,12 @@ export default function agentOffice(pi: Pi) {
       const a = (args ?? '').trim()
       if (a === '') {
         isPlanShown = !isPlanShown
+        // 사이드바가 떠 있으면 평면도가 들어갈 폭으로 다시 띄운다
+        if (side !== null) {
+          side.hide()
+          side = null
+          openSide()
+        }
         ctx.ui?.notify?.(isPlanShown ? '사무실 평면도를 켭니다.' : '사무실 평면도를 끕니다(목록만).', 'info')
         changed()
         return
