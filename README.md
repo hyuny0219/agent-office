@@ -13,7 +13,7 @@ Claude Code에서 서브에이전트들이 일하는 모습을 **위에서 내�
 
 ## oh-my-pi판
 
-같은 판단 코드(`core/`)로 만든 oh-my-pi(omp) 확장이 `omp/`에 있습니다. Claude Code판과 따로 배포되고 인사 기록도 따로 남습니다(`~/.omp/agent-office/hr.json`). `node scripts/pack-omp.mts --pack`으로 `dist/omp-agent-office-<버전>.tgz`를 만들어 사내 레지스트리에 올립니다(Claude Code 파일은 들어가지 않습니다). 설치와 쓰는 법은 [omp/README.md](omp/README.md).
+같은 판단 코드(`core/`)로 만든 oh-my-pi(omp) 확장이 `omp/`에 있습니다. Claude Code판과 따로 배포되고 인사 기록도 따로 남습니다(`~/.omp/agent-office/hr.json`). `node scripts/pack-omp.mts --pack`으로 `dist/omp-agent-office-<버전>.tgz`를 만들어 사내 레지스트리에 올리거나, 받은 사람이 정해 둔 폴더에 풀어 `omp plugin install <폴더>`로 설치합니다(Claude Code 파일은 들어가지 않습니다). 설치와 쓰는 법은 [omp/README.md](omp/README.md).
 
 ## 설치
 

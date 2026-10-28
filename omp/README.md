@@ -6,14 +6,31 @@ Claude Code판(agent-office 플러그인)과 판단 코드(`core/`)는 같지만
 
 ## 설치
 
-omp의 플러그인으로 설치합니다(Claude Code의 `/plugin install`과 같은 자리). 한 번 설치하면 omp를 켤 때마다 저절로 불러옵니다.
+omp의 플러그인으로 설치합니다(Claude Code의 `/plugin install`과 같은 자리). 한 번 설치하면 omp를 켤 때마다 저절로 불러옵니다. omp는 패키지 이름(npm 레지스트리)과 폴더만 받습니다: `.tgz` 파일 경로나 `file:`은 받지 않고, git 주소는 저장소 맨 위의 패키지만 읽습니다.
+
+**사내 npm 레지스트리가 있으면**(레지스트리는 `~/.npmrc`나 `bunfig.toml`로 지정)
 
 ```sh
-# 사내 레지스트리에 올린 패키지에서(레지스트리는 ~/.npmrc나 bunfig로 지정)
+# 올리기(배포하는 사람)
+node scripts/pack-omp.mts --pack
+npm publish dist/omp-agent-office-<버전>.tgz --registry <사내 레지스트리>
+# 설치·갱신(쓰는 사람)
 omp plugin install omp-agent-office
-# 또는 받은 .tgz·폴더에서
-omp plugin install ./omp-agent-office-<버전>.tgz
+omp plugin upgrade omp-agent-office
+```
+
+**레지스트리 없이 `.tgz` 파일로 받으면**: 늘 둘 폴더에 풀고 그 폴더를 설치합니다(omp는 그 폴더를 연결해 쓰므로 지우면 안 됩니다).
+
+```sh
+mkdir -p ~/.omp/agent-office/plugin
+tar xzf omp-agent-office-<버전>.tgz -C ~/.omp/agent-office/plugin --strip-components=1
+omp plugin install ~/.omp/agent-office/plugin
+# 새 판으로 갈 때: 같은 폴더에 다시 풀고 omp를 다시 켠다(설치는 다시 하지 않아도 된다)
+```
+
+```sh
 omp plugin list            # 설치 확인
+omp plugin doctor          # 불러오기 점검
 omp plugin uninstall omp-agent-office
 ```
 
