@@ -177,3 +177,47 @@ describe('사내 모델(GLM만 쓸 수 있을 때)', () => {
     }
   })
 })
+
+describe('업무 일지', () => {
+  test('서브에이전트가 일을 끝내면 일지에 남고, 날짜별 파일은 설정을 켰을 때만(/office journal save on) 쓴다', async () => {
+    const { existsSync, readFileSync } = await import('node:fs')
+    const { journalList, saveHr } = await import('./store')
+    const { dayOf } = await import('../core/journal')
+    const file = join(home, 'journal', `${dayOf(Date.now())}.md`)
+    const run = async (id: string, what: string) => {
+      ctx.agent = { kind: 'sub', id, name: 'task', parentId: 'main' }
+      await fire('before_agent_start', { reason: 'prompt', prompt: what, systemPrompt: [] })
+      await fire('tool_result', { toolName: 'edit', input: { path: '/r/src/login.ts' }, content: [{ type: 'text', text: 'ok' }], isError: false })
+      await fire('agent_end', { willContinue: false, messages: [{ role: 'assistant', stopReason: 'stop', content: [{ type: 'text', text: '고쳤습니다. password=hunter2abc' }] }] })
+    }
+    const was = ctx.agent
+    saveHr(b => ({ ...b, isApproving: false }))
+    // 꺼져 있으면(기본) 일지에는 남지만 파일은 쓰지 않는다
+    try {
+      await run('j0', '설정 끈 채 한 일')
+    } finally {
+      ctx.agent = was
+    }
+    await settle()
+    expect(journalList()[0]?.description).toBe('설정 끈 채 한 일')
+    expect(existsSync(file)).toBe(false)
+    saveHr(b => ({ ...b, isJournalSaving: true }))
+    const sub = { kind: 'sub', id: 'j1', name: 'task', parentId: 'main' }
+    try {
+      ctx.agent = sub
+      await fire('before_agent_start', { reason: 'prompt', prompt: '로그인 버그 고치기', systemPrompt: [] })
+      await fire('tool_result', { toolName: 'edit', input: { path: '/r/src/login.ts' }, content: [{ type: 'text', text: 'ok' }], isError: false })
+      await fire('agent_end', { willContinue: false, messages: [{ role: 'assistant', stopReason: 'stop', content: [{ type: 'text', text: '고쳤습니다. password=hunter2abc' }] }] })
+    } finally {
+      ctx.agent = was
+    }
+    await settle()
+    const e = journalList()[0]
+    expect(e?.description).toBe('로그인 버그 고치기')
+    expect(e?.files).toEqual(['/r/src/login.ts'])
+    expect(e?.report).toContain('고쳤습니다.')
+    expect(e?.report).not.toContain('hunter2abc')
+    expect(existsSync(file)).toBe(true)
+    expect(readFileSync(file, 'utf8')).toContain('로그인 버그 고치기')
+  })
+})

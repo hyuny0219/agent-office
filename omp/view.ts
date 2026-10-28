@@ -1,6 +1,7 @@
 // oh-my-pi판 화면의 줄 만들기: 입력창 위 2단 패널, 오른쪽 사이드바, 메뉴 화면. omp에 기대지 않는 순수 함수라
 // 화면 스냅샷(scripts/snap.ts)과 테스트가 그대로 부른다. 평면도 줄은 부르는 쪽이 만들어 넘긴다(Office는 프레임마다 상태가 있다).
-import type { HrBook, OfficeAgent, Utterance } from '../types'
+import type { HrBook, JournalEntry, OfficeAgent, Utterance } from '../types'
+import { journalBlocks, journalViewOf } from '../core/journal'
 import { feedRowsOf, rowsOf } from '../core/rows'
 import { budgetBlocks } from '../core/budget'
 import { archiveBlocks, cardBlocks, deptMapBlocks, findEmployee, reportBlocks, rosterBlocks } from '../core/report'
@@ -44,7 +45,7 @@ export function pad(line: string, width: number): string {
 /** 그 칸 수의 평면도 줄(평면도를 켜지 않았으면 null) */
 export type PlanLines = ((columns: number) => string[]) | null
 
-export type Scene = { agents: readonly OfficeAgent[]; book: HrBook; feed: readonly Utterance[]; now: number }
+export type Scene = { agents: readonly OfficeAgent[]; book: HrBook; feed: readonly Utterance[]; now: number; journal?: readonly JournalEntry[] }
 
 const tinted = (r: { text: string; isOff: boolean; isBad: boolean }): string => (r.isOff ? `\x1b[2m${r.text}\x1b[0m` : r.isBad ? `\x1b[31m${r.text}\x1b[0m` : r.text)
 
@@ -82,7 +83,7 @@ export function sideLines(width: number, s: Scene, plan: PlanLines): string[] {
   return lines.map(l => clip(l, width))
 }
 
-// ── 메뉴 화면: 0 사무실(평면도·목록, 누르면 인사카드), 1~7로 고른 것을 표로, 설정은 그 자리에서 켜고 끈다 ─────────────
+// ── 메뉴 화면: 0 사무실(평면도·목록, 누르면 인사카드), 1~8로 고른 것을 표로, 설정은 그 자리에서 켜고 끈다 ─────────────
 
 export const MENU = [
   { key: '0', label: '사무실', view: 'office' },
@@ -93,12 +94,14 @@ export const MENU = [
   { key: '5', label: '설정', view: 'settings' },
   { key: '6', label: '지침', view: 'playbook' },
   { key: '7', label: '기록', view: 'archive' },
+  { key: '8', label: '일지', view: 'journal' },
 ] as const
 export const TOGGLES = [
   { key: 'a', label: '결재', isOn: (b: HrBook) => b.isApproving, flip: (b: HrBook): HrBook => ({ ...b, isApproving: !b.isApproving }) },
   { key: 'r', label: '조직 개편', isOn: (b: HrBook) => b.isReorganizing, flip: (b: HrBook): HrBook => ({ ...b, isReorganizing: !b.isReorganizing }) },
   { key: 'm', label: '인사 메모', isOn: (b: HrBook) => b.isCoaching, flip: (b: HrBook): HrBook => ({ ...b, isCoaching: !b.isCoaching }) },
   { key: 't', label: '교육 효과 측정', isOn: (b: HrBook) => b.isTrialing, flip: (b: HrBook): HrBook => ({ ...b, isTrialing: !b.isTrialing }) },
+  { key: 'j', label: '업무 일지 파일 저장(날마다 journal/<날짜>.md)', isOn: (b: HrBook) => b.isJournalSaving === true, flip: (b: HrBook): HrBook => ({ ...b, isJournalSaving: b.isJournalSaving !== true }) },
 ] as const
 
 /** 그 화면의 내용 */
@@ -116,6 +119,8 @@ export function viewBlocks(view: string, s: Scene): Block[] {
   if (view === 'playbook') return playbookBlocks(b, s.now)
   if (view === 'office') return [{ t: 'title', text: '사무실' }]
   if (view === 'archive') return archiveBlocks(b)
+  const jv = journalViewOf(view)
+  if (jv !== null) return journalBlocks(b, s.journal ?? [], s.now, jv)
   if (view === 'settings') {
     return [{ t: 'title', text: '설정' }, { t: 'line', text: '글자를 누르면 바로 켜고 끕니다.' }, ...TOGGLES.map(x => ({ t: 'bullet', text: `${x.key}: ${x.isOn(b) ? '[켜짐]' : '[꺼짐]'} ${x.label}` } as const)),
       { t: 'gap' }, ...deptMapBlocks(b)]
@@ -124,7 +129,9 @@ export function viewBlocks(view: string, s: Scene): Block[] {
 }
 
 /** 메뉴 화면 맨 위 줄(고른 메뉴는 뒤집어 보인다) */
-export const menuHead = (view: string): string => `${MENU.map(m => (m.view === view ? `\x1b[7m ${m.key} ${m.label} \x1b[0m` : ` ${m.key} ${m.label} `)).join(' ')}   \x1b[2mq 닫기\x1b[0m`
+/** 그 메뉴를 보고 있는지(일지는 journal:week·journal:<별칭>도 8) */
+export const isOnView = (m: string, view: string): boolean => m === view || (m === 'journal' && view.startsWith('journal:'))
+export const menuHead = (view: string): string => `${MENU.map(m => (isOnView(m.view, view) ? `\x1b[7m ${m.key} ${m.label} \x1b[0m` : ` ${m.key} ${m.label} `)).join(' ')}   \x1b[2mq 닫기\x1b[0m`
 
 /** 메뉴 화면 줄(마크다운 부품이 없으면 글 표로) */
 export function menuLines(view: string, width: number, s: Scene, markdown: ((md: string, width: number) => string[]) | null): string[] {

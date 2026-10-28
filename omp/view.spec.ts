@@ -107,7 +107,7 @@ describe('사이드바', () => {
 
 describe('메뉴 화면', () => {
   test('1~7: 고른 메뉴는 뒤집어 보이고, 7은 월별 기록, 설정에는 부서 배치 표가 있다', () => {
-    expect(MENU.map(m => m.key).join('')).toBe('01234567')
+    expect(MENU.map(m => m.key).join('')).toBe('012345678')
     expect(menuHead('archive')).toContain('\x1b[7m 7 기록 \x1b[0m')
     const s = scene({ book: setDept(record(hire(emptyBook(), 'BEAR', 'dev', 'builder', 0).book, { nick: 'BEAR', dept: 'dev', job: 1, description: '빌드', startedAt: 0, endedAt: NOW, outcome: 'done', score: 13, errors: 0, isCheckFailed: false, isReworked: false, alarms: 0 }), 'builder', 'qa') })
     const archive = menuLines('archive', 120, s, null).map(plain).join('\n')

@@ -41,6 +41,7 @@ In the desktop app, where `/plugin` does not run: click + next to the prompt box
 | --- | --- |
 | `/office` | Open the office floor plan pane |
 | `/office menu` | Open the office menu pane: roster, daily/weekly reports, budget, settings, playbooks and monthly records as tables |
+| `/office journal [today\|week\|<nick>]` | Work journal: what employees actually did (task, result, score, approval notes, files changed, checks run, errors, their own report) as a report. Also menu `8` |
 | `/office export [json\|csv] [<folder>]` | Export the HR records: `json` (default) as a whole, `csv` as two files (job log and monthly summary, Excel-friendly). Without a folder it writes to `agent-office-export/` in the session folder |
 | `/office dept [<type> <dept>\|<type> reset]` | Show, change or reset which department an agent type goes to (e.g. `/office dept writer qa`) |
 | `/office playbook [<dept> adopt <n\|all>\|<dept> drop <n>]` | Department playbooks (agent improvement): see proposals built from repeated flaws, adopt or drop them, compare results before and after |
@@ -186,6 +187,10 @@ The job log keeps the latest 300 jobs; older jobs pushed out of it are not delet
 - `csv`: the job log (`…-jobs.csv`) and monthly summaries (`…-months.csv`), with a BOM so Excel reads Korean, and agent-written cells starting with `=`, `+`, `-` or `@` prefixed with `'` so they are not read as formulas.
 
 Without a folder it writes to `agent-office-export/` in the session folder; add it to `.gitignore` inside a repository.
+
+### Work journal
+
+When an employee (subagent) finishes, one entry records what it actually did: when, who (department, rank), the task, result, duration, score, tokens, the approval result and notes, boss rating and rework, files changed, test/build commands run and their results, errors, and the employee's own report (secret-looking values masked, first 1,500 characters). See it with `/office journal` (today), `/office journal week` (last 7 days) or `/office journal <nick>` (that person's last 20), or menu `8`; write it to a Markdown file with `/office export journal [today|week]`. The journal keeps the latest 200 entries separately from the HR records. It is for people to read and is never attached to task briefs.
 
 ### Measuring the training effect
 

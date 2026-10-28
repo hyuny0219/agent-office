@@ -8,6 +8,8 @@ import { fileURLToPath } from 'node:url'
 
 import type { HrBook, JobRecord, OfficeAgent, Utterance } from '../types'
 import { emptyBook, hire, record, setDept } from '../core/hr'
+import { addEntry } from '../core/journal'
+import type { JournalEntry } from '../types'
 import { adopt, proposalsOf } from '../core/playbook'
 import { feedRowsOf, rowsOf } from '../core/rows'
 import { layoutOf, Office } from '../core/scene'
@@ -90,7 +92,15 @@ function planText(columns: number): string[] {
 }
 const planLines: PlanLines = (columns: number) => planText(columns)
 
-const scene: Scene = { agents: AGENTS, book: bookOf(), feed: FEED, now: NOW }
+/** 업무 일지(오늘 끝낸 일 둘) */
+const JOURNAL: JournalEntry[] = [
+  { nick: 'FOX', dept: 'plan', job: 1, type: 'planner', description: '이번 주 계획 세우기', startedAt: NOW - 42 * MIN, endedAt: NOW - 30 * MIN, outcome: 'done', files: ['/repo/docs/plan.md'], checks: [], errors: [],
+    report: '이번 주 할 일을 세 단계로 나눴습니다.\n- 로그인 버그\n- 결제 화면\n남은 위험: 결제 테스트가 느립니다.', tokens: tokens(0.4) },
+  { nick: 'BEAR', dept: 'dev', job: 2, type: 'builder', description: '테스트 실패 고치기', startedAt: NOW - 412 * MIN, endedAt: NOW - 400 * MIN, outcome: 'done', files: ['/repo/src/login.ts', '/repo/src/login.test.ts'],
+    checks: [{ cmd: 'npm test', result: 'fail', tail: '1 failed' }], errors: ['Edit: string to replace not found'], report: '고쳤습니다. 테스트는 아직 하나 실패합니다.', approvalNotes: ['실패한 테스트를 두고 끝냈다'] },
+].reduce<JournalEntry[]>((list, e) => addEntry(list, e), []).reverse()
+
+const scene: Scene = { agents: AGENTS, book: bookOf(), feed: FEED, now: NOW, journal: JOURNAL }
 const lines = (xs: readonly string[]) => `${xs.map(l => plain(l).trimEnd()).join('\n')}\n`
 
 const shots: Record<string, string> = {

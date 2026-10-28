@@ -52,6 +52,8 @@ export type Block =
   | { t: 'section'; text: string }
   | { t: 'bullet'; text: string }
   | { t: 'field'; label: string; value: string }
+  /** 옮겨 적은 글(직원 보고 등): 줄마다 > 로, 마크다운에서는 인용(안의 글은 서식으로 읽히지 않게 이스케이프) */
+  | { t: 'quote'; lines: readonly string[] }
   | { t: 'table'; head: readonly string[]; rows: readonly (readonly string[])[]; align?: readonly ('l' | 'r')[]; max?: readonly (number | undefined)[] }
 
 /** 이름표 줄의 이름 폭 */
@@ -66,6 +68,7 @@ export function textOf(blocks: readonly Block[]): string {
       case 'section': return [`■ ${b.text}`]
       case 'bullet': return [`- ${b.text}`]
       case 'field': return [`${pad(b.label, FIELD_WIDTH)}${cellOf(b.value)}`]
+      case 'quote': return b.lines.map(l => `> ${l}`)
       case 'table': return tableLines(b.head, b.rows, b.align, b.max)
     }
   }).join('\n')
@@ -83,17 +86,28 @@ export const mdText = (s: string, max?: number): string =>
     .replace(/[\\`*_[\]<>|#~]/g, ch => `\\${ch}`)
 
 /** 마크다운으로: 제목 ##, 절 ###, 표는 마크다운 표(수는 오른쪽 정렬), 이름표는 줄바꿈으로 잇고, 나머지는 문단 */
-export function mdOf(blocks: readonly Block[]): string {
+/**
+ * 줄 앞의 블록 표시를 글자로: 목록(- +)은 앞에 \\, 번호 목록(1.)은 점 앞에 \\(\\1.은 이스케이프가 아니라 그대로 보인다).
+ * isQuote면 제목 밑줄(=== ---)·빈 글머리도 막는다
+ */
+const escapeLead = (md: string, isQuote = false): string =>
+  md.replace(isQuote ? /^([-+=]+)(?=\s|$)/ : /^([-+])(?= )/, '\\$1').replace(isQuote ? /^(\d+)\.(?=\s|$)/ : /^(\d+)\.(?= )/, '$1\\.')
+
+/** max: 화면이 한 번에 그리는 한도(파일로 쓸 때는 Infinity) */
+export function mdOf(blocks: readonly Block[], max = MD_MAX): string {
   const parts: { t: Block['t']; md: string }[] = []
   for (const b of blocks) {
     switch (b.t) {
       case 'title': parts.push({ t: b.t, md: `## ${mdText(b.text)}` }); break
       // 줄이 목록 표시(- , + , 1. )로 시작하면 목록으로 그려지지 않게 앞을 이스케이프한다
-      case 'line': parts.push({ t: b.t, md: mdText(b.text).replace(/^([-+]|\d+\.)(?= )/, '\\$1') }); break
+      case 'line': parts.push({ t: b.t, md: escapeLead(mdText(b.text)) }); break
       case 'gap': break
       case 'section': parts.push({ t: b.t, md: `### ${mdText(b.text)}` }); break
       case 'bullet': parts.push({ t: b.t, md: `- ${mdText(b.text)}` }); break
       case 'field': parts.push({ t: b.t, md: `**${mdText(b.label)}** ${mdText(b.value)}` }); break
+      // 줄마다 끊어(줄 끝 두 칸) 한 인용으로
+      // 옮겨 적은 글은 서식으로 읽히지 않게: 줄 앞의 목록·제목 밑줄(-, +, =, 1.) 표시와 맨 주소의 자동 링크(://)도 끊는다
+      case 'quote': parts.push({ t: b.t, md: b.lines.map(l => `> ${escapeLead(mdText(l), true).replace(/:\/\//g, ':\\/\\/')}`).join('  \n') }); break
       case 'table': {
         const row = (cells: readonly string[]) => `| ${cells.join(' | ')} |`
         parts.push({ t: b.t, md: [
@@ -112,5 +126,5 @@ export function mdOf(blocks: readonly Block[]): string {
     if (prev === 'field' && x.t === 'field') return `${s}  \n${x.md}`
     return `${s}\n\n${x.md}`
   }, '')
-  return md.length <= MD_MAX ? md : `${md.slice(0, MD_MAX - 20)}\n\n…(잘림)`
+  return md.length <= max ? md : `${md.slice(0, max - 20)}\n\n…(잘림)`
 }

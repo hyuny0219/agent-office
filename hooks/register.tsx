@@ -11,6 +11,7 @@ import { answer, COMMAND } from './commands'
 import { awaitApproval, checkBudget, checkFollowUp, checkProposals, gateSpawn, seePlaybook, checkRework, EDIT_TOOLS, fileOf, isCheckCommand, papers, reorganize, reviewPlan, syncStatus, takeNotes, watch } from './flow'
 import { usageOf } from '../core/tokens'
 import { playbookLines, proposalAlert } from '../core/playbook'
+import { journalViewFor } from '../core/journal'
 import { briefNotes } from '../core/notes'
 import { cardView, deptButtons, deptNote, flip, MENU, MENU_PANE, MENU_TITLE, nickOfView, playbookButtons, pressDept, pressPlaybook, ratableOf, rateJob, TOGGLES, viewBlocks } from './menu'
 import { mdOf } from '../core/table'
@@ -41,7 +42,17 @@ export const register: Register = (on, options) => {
   on('command.run', { command: 'office' }, async ($, e) => {
     if (e.args.trim().toLowerCase() === 'menu') {
       const opened = await $.ui.open({ id: MENU_PANE, title: MENU_TITLE, focus: true, closeOnEscape: true })
-      return { text: opened.isPlaced ? '사무실 메뉴를 열었습니다. 1 인사 명부 · 2 일간 보고 · 3 주간 보고 · 4 예산 · 5 설정 · 6 지침 · 7 기록' : '사무실 메뉴가 아직 그려지지 않았습니다(창이 좁으면 넓혀 주세요).' }
+      return { text: opened.isPlaced ? '사무실 메뉴를 열었습니다. 1 인사 명부 · 2 일간 보고 · 3 주간 보고 · 4 예산 · 5 설정 · 6 지침 · 7 기록 · 8 일지' : '사무실 메뉴가 아직 그려지지 않았습니다(창이 좁으면 넓혀 주세요).' }
+    }
+    // 업무 일지는 메뉴 화면에만 연다(직원이 쓴 보고가 대화 기록·메인 모델 맥락에 남지 않도록)
+    const [sub, jarg, extra] = e.args.trim().split(/\s+/)
+    if (sub?.toLowerCase() === 'journal' && extra === undefined) {
+      const view = journalViewFor(jarg)
+      if (view !== null) {
+        await setMenuView($, view)
+        const opened = await $.ui.open({ id: MENU_PANE, title: MENU_TITLE, focus: true, closeOnEscape: true })
+        return { text: opened.isPlaced ? '메뉴 화면에 업무 일지를 열었습니다(8 일지).' : '메뉴 화면을 열 수 없습니다(창이 좁거나 화면이 없음). 파일로 받으려면 /office export journal [today|week]' }
+      }
     }
     const text = await answer($, e.args)
     // 대표 평가·결재 설정으로 지침 후보가 바뀌었을 수 있다
@@ -299,7 +310,7 @@ export const register: Register = (on, options) => {
     return (
       <Box flexDirection="column">
         <Box columnGap={2} flexWrap="wrap">
-          {MENU.map(m => <Button key={m.key} hotkey={m.hotkey} plain dimColor={view !== m.view} onPress={go(m.view)}>{m.label}</Button>)}
+          {MENU.map(m => <Button key={m.key} hotkey={m.hotkey} plain dimColor={!(view === m.view || (m.view === 'journal' && view.startsWith('journal:')))} onPress={go(m.view)}>{m.label}</Button>)}
           <Button key="menu-close" hotkey="q" plain dimColor role="dismiss" onPress={() => $.ui.close({ id: MENU_PANE }).catch(() => undefined)}>닫기</Button>
         </Box>
         <Box marginTop={1} flexDirection="column">

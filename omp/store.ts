@@ -5,7 +5,8 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmdirSync, statSync, w
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
-import type { HrBook, OfficeAgent, Utterance } from '../types'
+import type { HrBook, JournalEntry, OfficeAgent, Utterance } from '../types'
+import { journalOf } from '../core/journal'
 import { emptyBook, migrate } from '../core/hr'
 import { pushLine } from '../core/speech'
 
@@ -114,6 +115,51 @@ export function saveHr(fn: (b: HrBook) => HrBook): HrBook {
     // 저장이 막혀도 사무실은 돈다(이번 세션 동안은 메모리에 남는다)
     book = next ?? fn(book ?? emptyBook())
     return book
+  }
+}
+
+// ── 업무 일지: 인사 기록 옆 journal.json(보고 글이 들어 커지므로 따로). 쓸 때마다 같은 잠금으로 파일의 최신 내용 위에 고친다 ─────
+
+export const JOURNAL_FILE = join(HR_DIR, 'journal.json')
+let journal: JournalEntry[] | null = null
+let journalMtime = -1
+const journalMtimeOf = (): number => {
+  try {
+    return statSync(JOURNAL_FILE).mtimeMs
+  } catch {
+    return -1
+  }
+}
+function loadJournal(): JournalEntry[] {
+  journalMtime = journalMtimeOf()
+  try {
+    return journalOf(JSON.parse(readFileSync(JOURNAL_FILE, 'utf8')))
+  } catch {
+    // 없거나 깨졌으면 새로(일지는 인사 기록이 아니니 옮겨 두지 않는다)
+    return []
+  }
+}
+/** 업무 일지(최근 것이 앞) */
+export function journalList(): JournalEntry[] {
+  if (journal === null || journalMtimeOf() !== journalMtime) journal = loadJournal()
+  return journal
+}
+/** 업무 일지를 고치고 파일에 남긴다(본인만 읽을 수 있게) */
+export function saveJournal(fn: (list: JournalEntry[]) => JournalEntry[]): JournalEntry[] {
+  let next: JournalEntry[] | null = null
+  try {
+    return withLock(() => {
+      next = fn(journalMtimeOf() === journalMtime && journal !== null ? journal : loadJournal())
+      const tmp = `${JOURNAL_FILE}.${process.pid}.tmp`
+      writeFileSync(tmp, JSON.stringify(next), { mode: 0o600 })
+      renameSync(tmp, JOURNAL_FILE)
+      journal = next
+      journalMtime = journalMtimeOf()
+      return next
+    })
+  } catch {
+    journal = next ?? fn(journal ?? [])
+    return journal
   }
 }
 

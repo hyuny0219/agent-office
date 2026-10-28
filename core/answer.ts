@@ -1,6 +1,8 @@
 // /office 명령의 글 답. 결재·보고서·인사 기록·켜고 끄기. 인자가 없으면 null(사무실 화면을 연다).
 // 엔진과 무관하다: 인사 기록을 읽고 쓰는 길과 시계는 Desk로 받는다(Claude Code·oh-my-pi가 각자 준다).
-import type { HrBook, OfficeAgent } from '../types'
+import type { HrBook, JournalEntry, OfficeAgent } from '../types'
+import { journalBlocks, journalViewFor } from './journal'
+import type { JournalPeriod } from './journal'
 
 import { APPROVER_MODEL, REJECT_PENALTY } from './approval'
 import { cardOf, deptMapBlocks, findEmployee, reportOf, rosterText } from './report'
@@ -8,10 +10,10 @@ import type { Period } from './report'
 import { IDLE_JOBS, IDLE_MS, RETIRE_AVG, RETIRE_JOBS } from './org'
 import { CONTROL_EVERY } from './trial'
 import { amountText, budgetLines, deptNamed, dollarsOf, tokensAmountOf, unwaive } from './budget'
-import { exportFiles } from './archive'
+import { exportBase, exportFiles } from './archive'
 import type { ExportKind } from './archive'
 import { adopt, dropRule, markSeen, MAX_RULES, settled, playbookBlocks, proposalsOf, roomOf } from './playbook'
-import { textOf } from './table'
+import { mdOf, textOf } from './table'
 import { usdText } from './tokens'
 import { BOSS_RATE_POINTS, DEPT_INFO, DEPTS, deptFor, deptOf, isTypeKey, MAX_DEPT_MAP, rate, setDept, typeKey } from './hr'
 
@@ -28,8 +30,8 @@ const withRo = (word: string): string => {
 
 export const COMMAND = {
   name: 'office',
-  description: '에이전트 사무실 평면도 보기. menu: 메뉴 화면(인사 명부·보고서·예산·설정·지침·월별 기록을 표로), export [json|csv] [<폴더>]: 인사 기록 내보내기, dept [<종류> <부서>|<종류> reset]: 에이전트 종류의 부서 배치, playbook [<부서> adopt <n|all>|<부서> drop <n>]: 부서 지침(평가로 만든 개선안을 채택), rate <별칭> good|bad|clear: 최근 끝낸 일에 대표 평가, budget [<부서> <달러>|<부서> <토큰 수(2M·500k)>|<부서> off]: 부서별 하루 비용·토큰 한도, approval on|off: 보고·계획 결재 켜고 끄기, reorg on|off: 조직 개편(권고사직·계약 종료) 켜고 끄기, report [today|week]: 일간·주간 보고, hr: 인사 기록(부서·직급·연봉·평가), hr <별칭>: 인사카드, hr on|off: 업무 지시 인사 메모 켜고 끄기, hr ab on|off: 교육 효과 측정(비교군) 켜고 끄기',
-  argumentHint: '[menu | export [json|csv] [<폴더>] | dept [<종류> <부서>|<종류> reset] | playbook [<부서> adopt <n|all>|<부서> drop <n>] | rate <별칭> good|bad|clear | budget [<부서> <달러>|<토큰 수>|off] | approval on|off | reorg on|off | report [today|week] | hr [<별칭>|on|off|ab on|off]]',
+  description: '에이전트 사무실 평면도 보기. menu: 메뉴 화면(인사 명부·보고서·예산·설정·지침·월별 기록을 표로), journal [today|week|<별칭>]: 업무 일지(실제로 한 일의 보고서), export [json|csv|journal] [<폴더>]: 인사 기록·업무 일지 내보내기, dept [<종류> <부서>|<종류> reset]: 에이전트 종류의 부서 배치, playbook [<부서> adopt <n|all>|<부서> drop <n>]: 부서 지침(평가로 만든 개선안을 채택), rate <별칭> good|bad|clear: 최근 끝낸 일에 대표 평가, budget [<부서> <달러>|<부서> <토큰 수(2M·500k)>|<부서> off]: 부서별 하루 비용·토큰 한도, approval on|off: 보고·계획 결재 켜고 끄기, reorg on|off: 조직 개편(권고사직·계약 종료) 켜고 끄기, report [today|week]: 일간·주간 보고, hr: 인사 기록(부서·직급·연봉·평가), hr <별칭>: 인사카드, hr on|off: 업무 지시 인사 메모 켜고 끄기, hr ab on|off: 교육 효과 측정(비교군) 켜고 끄기',
+  argumentHint: '[menu | journal [today|week|<별칭>] | export [json|csv|journal [today|week]] [<폴더>] | dept [<종류> <부서>|<종류> reset] | playbook [<부서> adopt <n|all>|<부서> drop <n>] | rate <별칭> good|bad|clear | budget [<부서> <달러>|<토큰 수>|off] | approval on|off | reorg on|off | report [today|week] | hr [<별칭>|on|off|ab on|off]]',
 }
 
 /** 결재자 모델 안내(모델이 없으면 결재를 건너뛴다고) */
@@ -45,6 +47,8 @@ export type Desk = {
   write: (files: readonly { name: string; text: string }[], dir: string | null) => Promise<string[]>
   /** 결재를 부를 모델의 이름(안내 글용, 없으면 Claude Code판의 결재자 모델) */
   approverName?: () => string | null
+  /** 업무 일지(최근 것이 앞) */
+  journal: () => Promise<readonly JournalEntry[]>
 }
 
 /** 글로 답할 하위 명령이면 그 답, 화면을 열 명령이면 null */
@@ -165,6 +169,26 @@ export async function answerWith(desk: Desk, args: string): Promise<string | nul
     await desk.save(x => setDept(x, key, dept))
     const to = DEPT_INFO[dept ?? deptOf(key)].ko
     return dept === null ? `${key}를 기본 배치(${to})로 되돌립니다.` : `${key}를 ${to}에 배치합니다. 이미 뽑은 직원은 제 부서에 남고, 새로 맡기는 일부터 ${to} 직원이 받습니다.`
+  }
+  if (sub === 'journal') {
+    // 일지 본문(직원이 쓴 보고)은 명령 답으로 내지 않는다: 명령 답은 대화 기록에 남아 메인 모델도 읽는다. 각 판이 메뉴 화면으로 열고, 여기 오면 안내만
+    if (arg?.toLowerCase() === 'save') return '날짜별 일지 파일 저장(/office journal save on|off)은 omp판 설정입니다. 여기서는 /office export journal [today|week]로 파일로 받습니다.'
+    if (journalViewFor(arg) === null) return '쓰는 법: /office journal [today|week|<별칭>] (파일로 받으려면 /office export journal [today|week])'
+    return '업무 일지는 메뉴 화면 8 일지에서 봅니다(직원이 쓴 보고가 대화 기록에 남지 않도록). 파일로 받으려면 /office export journal [today|week]'
+  }
+  if (sub === 'export' && arg?.toLowerCase() === 'journal') {
+    // /office export journal [today|week] [<폴더>]: 업무 일지를 마크다운 파일로
+    const period: JournalPeriod = arg2?.toLowerCase() === 'week' ? 'week' : 'today'
+    const rest = args.trim().split(/\s+/).slice(arg2?.toLowerCase() === 'week' || arg2?.toLowerCase() === 'today' ? 3 : 2).join(' ').trim()
+    const now = await desk.now()
+    // 파일은 화면 한도로 자르지 않는다
+    const md = `${mdOf(journalBlocks(await desk.book(), await desk.journal(), now, period), Infinity)}\n`
+    try {
+      const paths = await desk.write([{ name: `${exportBase(now)}-journal-${period}.md`, text: md }], rest === '' ? null : rest)
+      return `업무 일지를 내보냈습니다:\n${paths.map(p => `- ${p}`).join('\n')}`
+    } catch (err) {
+      return `내보내지 못했습니다: ${err instanceof Error ? err.message : String(err)}`.split('\n')[0] ?? ''
+    }
   }
   if (sub === 'export') {
     // 꼴을 빼고 폴더만 주면(경로처럼 생긴 것) json으로 본다

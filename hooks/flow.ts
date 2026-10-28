@@ -17,7 +17,8 @@ import { addNote, markRejected, noteOf } from '../core/notes'
 import { markSeen, proposalNotices, tellProposals } from '../core/playbook'
 import { anyBudget, BUDGET_CHOICES, budgetDenyText, budgetQuestion, choiceOf, gateOf, noticed, overrunsOf, overrunText, waive } from '../core/budget'
 import type { BudgetChoice, Overrun } from '../core/budget'
-import { admit, agentsOf, fresh, hold, hrOf, keptNow, MEET_MS, meet, nickOfId, patch, release, save, saveHr, speak } from './store'
+import { admit, agentsOf, fresh, hold, hrOf, keptNow, MEET_MS, meet, nickOfId, patch, release, save, saveHr, saveJournal, speak } from './store'
+import { addEntry, entryOf, noteApproval } from '../core/journal'
 
 /** 파일을 고치는 도구(재작업 판정에 쓴다) */
 export const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
@@ -106,6 +107,11 @@ async function review1($: EngineInterface, a: OfficeAgent, isDone: boolean, isKi
   const r = result as ReturnType<typeof review> | null
   if (r === null) return false
   const e = r.book.employees.find(x => x.nick === a.nick)
+  // 업무 일지: 실제로 한 것(파일·확인 명령·오류·보고)을 남긴다. 기다리지 않는다(곁가지 기록이 결재·평가를 늦추지 않도록, 실패해도 평가는 그대로)
+  if (e !== undefined) {
+    const entry = entryOf(got, e.jobs, isDone ? 'done' : isKilled ? 'killed' : 'failed', got.endedAt ?? now, papers.get(a.id)?.report ?? '', r.book.log.find(x => x.nick === a.nick && x.job === e.jobs)?.dept)
+    void saveJournal($, j => addEntry(j, entry)).catch(() => undefined)
+  }
   // 끝낸 일의 보고를 결재에 올린다(기다리지 않는다: 결재자가 답하는 사이에도 사무실은 돈다)
   let isPassed = false
   if (!(isDone && e !== undefined && r.book.isApproving)) papers.delete(a.id)
@@ -206,6 +212,8 @@ async function approve($: EngineInterface, nick: string, job: number, xpBefore: 
     return d.verdict === 'rejected' ? markRejected(moved.book, nick, job, d.notes) : moved.book
   })
   const m = moved as ReturnType<typeof decide> | null
+  // 결재 의견도 일지에(기다리지 않는다: 저장은 부른 순서대로 사본에 적힌다)
+  if (d.notes.length > 0) void saveJournal($, j => noteApproval(j, nick, job, d.notes)).catch(() => undefined)
   $.ui.toast(`${decisionToast(e, route, f.description, d, penalty)}${m === null ? '' : movedText(m)}`)
   await speak($, null, null, approvalLineOf(route.approverTitle,
     `${e.nick} "${f.description}" ${d.verdict === 'approved' ? '승인' : `반려${d.notes[0] === undefined ? '' : ` — ${d.notes[0]}`}`}`, await $.clock.now()))

@@ -3,7 +3,8 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface } from 'claude-code'
 
-import type { Bubble, Employee, HrBook, OfficeAgent, TokenUse, Utterance } from '../types'
+import type { Bubble, Employee, HrBook, JournalEntry, OfficeAgent, TokenUse, Utterance } from '../types'
+import { journalOf } from '../core/journal'
 import { assign, DEPTS, deptFor, deptOf, emptyBook, hire, leadOf, migrate } from '../core/hr'
 import { pickFor } from '../core/org'
 import type { Assignment } from '../core/org'
@@ -33,6 +34,32 @@ export async function hrOf($: EngineInterface): Promise<HrBook> {
     return book
   })
   return loading
+}
+
+/** 업무 일지를 세션을 넘어 남기는 $.store 키(인사 기록과 따로: 보고 글이 들어 커진다) */
+const JOURNAL_KEY = 'journal'
+let journal: JournalEntry[] | null = null
+let journalLoading: Promise<JournalEntry[]> | null = null
+export async function journalEntries($: EngineInterface): Promise<JournalEntry[]> {
+  if (journal !== null) return journal
+  journalLoading ??= $.store.get(JOURNAL_KEY).then(stored => {
+    journal ??= journalOf(stored)
+    return journal
+  }, err => {
+    // 읽기에 실패하면 다음에 다시 읽는다(실패한 약속을 붙잡고 있지 않도록)
+    journalLoading = null
+    throw err
+  })
+  return journalLoading
+}
+/** 쓰기는 한 줄로 잇는다(나란히 부른 쓰기가 늦게 끝나 앞선 사본으로 덮지 않도록: 늘 그때의 최신 사본을 쓴다) */
+let journalWriting: Promise<void> = Promise.resolve()
+/** 일지를 고친다: 읽기를 기다린 뒤 사본에 바로 고치므로, 기다리지 않고 여러 번 불러도 부른 순서대로 적힌다 */
+export async function saveJournal($: EngineInterface, fn: (list: JournalEntry[]) => JournalEntry[]) {
+  await journalEntries($)
+  journal = fn(journal ?? [])
+  journalWriting = journalWriting.catch(() => undefined).then(() => $.store.set(JOURNAL_KEY, journal ?? []))
+  await journalWriting
 }
 
 export async function saveHr($: EngineInterface, fn: (b: HrBook) => HrBook) {

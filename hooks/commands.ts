@@ -2,7 +2,7 @@
 import type { EngineInterface } from 'claude-code'
 
 import { answerWith } from '../core/answer'
-import { agentsOf, hrOf, saveHr } from './store'
+import { agentsOf, hrOf, journalEntries, saveHr } from './store'
 
 export { COMMAND, rankChangeText } from '../core/answer'
 
@@ -31,5 +31,5 @@ async function writeFiles($: EngineInterface, files: readonly { name: string; te
 
 /** 글로 답할 하위 명령이면 그 답, 패널을 열 명령이면 null */
 export async function answer($: EngineInterface, args: string): Promise<string | null> {
-  return answerWith({ book: () => hrOf($), save: fn => saveHr($, fn), agents: () => agentsOf($), now: () => $.clock.now(), write: (files, dir) => writeFiles($, files, dir) }, args)
+  return answerWith({ book: () => hrOf($), save: fn => saveHr($, fn), agents: () => agentsOf($), now: () => $.clock.now(), write: (files, dir) => writeFiles($, files, dir), journal: () => journalEntries($) }, args)
 }

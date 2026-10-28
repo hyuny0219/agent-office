@@ -227,6 +227,8 @@ export type HrBook = {
   budgetNotices: Partial<Record<Dept, number>>
   /** 부서 지침(대표가 승인한 개선안): 그 부서 업무 지시에 붙는다 */
   playbooks?: Partial<Record<Dept, Playbook>>
+  /** 업무 일지를 날마다 파일로 남길지(omp판, /office journal save on|off, 기본 꺼짐) */
+  isJournalSaving?: boolean
   /** 부서별 하루(최근 24시간) 토큰 수 한도(/office budget <부서> 2M): 가격을 모르는 모델(사내 모델 등)도 잴 수 있다 */
   tokenBudgets?: Partial<Record<Dept, number>>
   /** 부서별로 예산 초과를 "계속"으로 넘긴 때(24시간 동안 새 일을 맡길 때 다시 묻지 않는다) */
@@ -239,6 +241,33 @@ export type HrBook = {
   proposalsTold?: Partial<Record<Dept, string[]>>
   /** 부서별로 대표가 지침 화면에서 본 후보의 열쇠(못 본 후보가 있으면 사무실 화면에 알림 줄) */
   proposalsSeen?: Partial<Record<Dept, string[]>>
+}
+
+/**
+ * 업무 일지 한 항목: 서브에이전트가 끝낸 일 한 건에서 실제로 한 것(사람이 읽는 기록, 업무 지시에는 붙이지 않는다).
+ * 점수·결재 결과·대표 평가는 업무 기록(log)에서 같은 별칭·몇 번째 일로 찾아 읽는다(나중에 바뀌어도 맞게)
+ */
+export type JournalEntry = {
+  nick: string
+  dept: Dept
+  job: number
+  /** 에이전트 종류 */
+  type: string
+  description: string
+  startedAt: number
+  endedAt: number
+  outcome: 'done' | 'failed' | 'killed'
+  /** 고친 파일(최근 30개) */
+  files: string[]
+  /** 돌린 테스트·빌드 명령과 결과 */
+  checks: CheckRun[]
+  /** 난 도구 오류 첫 줄 */
+  errors: string[]
+  /** 직원이 쓴 보고(비밀은 가리고, 앞부분만) */
+  report: string
+  /** 결재자 의견(결재가 끝나면) */
+  approvalNotes?: string[]
+  tokens?: TokenUse
 }
 
 /** 한 달 동안 끝낸 일의 요약: 건수·결과·점수 합·비용(일한 것+결재)·재작업·반려·대표 평가, 부서별 건수·점수 합·비용 */

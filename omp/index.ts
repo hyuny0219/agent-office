@@ -23,10 +23,11 @@ import type { Price } from '../core/tokens'
 import type { TokenUse } from '../types'
 import { anyBudget, BUDGET_CHOICES, budgetDenyText, budgetQuestion, choiceOf, noticed, overrunsOf, overrunText, waive } from '../core/budget'
 import type { BudgetChoice } from '../core/budget'
-import { textOf } from '../core/table'
+import { mdOf, textOf } from '../core/table'
 import { markSeen, playbookLines, proposalNotices, tellProposals } from '../core/playbook'
 import { ansiLines } from './ansi'
-import { agents, changed, feedOf, hr, HR_DIR, onChange, patch, saveHr, say, takeLoadWarning, trim } from './store'
+import { agents, changed, feedOf, hr, HR_DIR, journalList, onChange, patch, saveHr, saveJournal, say, takeLoadWarning, trim } from './store'
+import { addEntry, dayBlocks, dayOf, entryOf, journalViewFor, noteApproval } from '../core/journal'
 import { clickOf, isMouseReport, MENU, menuScreen, sideLines, TOGGLES, viewBlocks, widgetLines } from './view'
 import type { PlanLines, PlanView, Scene } from './view'
 import { descriptionOf, gatesFor, tasksOf } from './tasks'
@@ -212,6 +213,7 @@ async function approve(ctx: Ctx, a: OfficeAgent, job: number, xpBefore: number, 
   })
   ctx.ui?.notify?.(decisionToast(e, route, f.description, d, penalty), d.verdict === 'rejected' ? 'warning' : 'info')
   say(approvalLineOf(route.approverTitle, `${e.nick} "${f.description}" ${d.verdict === 'approved' ? '승인' : `반려${d.notes[0] === undefined ? '' : ` — ${d.notes[0]}`}`}`, now()))
+  if (d.notes.length > 0) saveJournal(j => noteApproval(j, a.nick, job, d.notes))
   if (d.verdict === 'rejected') notes.set(a.id, rejectNoteOf(e, route, f.description, d))
   changed()
 }
@@ -248,6 +250,9 @@ function appraise(ctx: Ctx, a: OfficeAgent, isDone: boolean) {
     const noted = employee === undefined ? logged : addNote(logged, a.nick, noteOf(job, got.description, papers.get(a.id)?.report ?? '', got.files ?? [], got.errLines ?? []))
     return isDone ? handOff(noted, { agentId: a.id, nick: a.nick, files: got.files ?? [], endedAt: ended, job }) : noted
   })
+  // 업무 일지: 실제로 한 것(파일·확인 명령·오류·보고)을 남기고 그날 파일을 쓴다
+  saveJournal(j => addEntry(j, entryOf(got, job, isDone ? 'done' : 'failed', ended, papers.get(a.id)?.report ?? '', hr().log.find(x => x.nick === a.nick && x.job === job)?.dept)))
+  writeDay(ended)
   ctx.ui?.notify?.(`${a.nick} 평가 ${score >= 0 ? '+' : ''}${score}`, 'info')
   say(reportLineOf(a.nick, 'BOSS', papers.get(a.id)?.report ?? '', ended).line)
   const f: Facts = {
@@ -258,6 +263,8 @@ function appraise(ctx: Ctx, a: OfficeAgent, isDone: boolean) {
   const p = (isDone ? approve(ctx, got, job, xpBefore, f) : Promise.resolve()).catch(() => undefined).finally(() => {
     approvals.delete(a.id)
     papers.delete(a.id)
+    // 결재 결과까지 든 그날 일지 파일
+    writeDay(ended)
     checkBudget(ctx)
     checkProposals(ctx)
     trim()
@@ -335,7 +342,21 @@ let frame = 0
 let lastTui: any = null
 
 /** 지금 사무실(화면 줄 만들기에 넘긴다) */
-const sceneNow = (): Scene => ({ agents: [...agents.values()], book: hr(), feed: feedOf(), now: now() })
+const sceneNow = (): Scene => ({ agents: [...agents.values()], book: hr(), feed: feedOf(), now: now(), journal: journalList() })
+
+/** 그날의 업무 일지 파일(인사 기록 옆 journal/<날짜>.md)을 지금 일지로 다시 쓴다(설정을 켰을 때만: /office journal save on). 실패해도 사무실은 돈다 */
+function writeDay(at: number) {
+  if (hr().isJournalSaving !== true) return
+  try {
+    const dir = join(HR_DIR, 'journal')
+    mkdirSync(dir, { recursive: true, mode: 0o700 })
+    const day = dayOf(at)
+    // 파일은 화면 한도로 자르지 않는다
+    writeFileSync(join(dir, `${day}.md`), `${mdOf(dayBlocks(hr(), journalList(), day), Infinity)}\n`, { mode: 0o600 })
+  } catch {
+    // 일지 파일은 곁가지 기록이다
+  }
+}
 
 /** 그 폭의 평면도 줄을 만드는 함수(평면도를 켰을 때만). 폭이 바뀌면 평면도를 새로 만든다 */
 function planOf(get: () => Office | null, set: (o: Office) => void): PlanLines {
@@ -579,7 +600,7 @@ function writeExports(files: readonly { name: string; text: string }[], dir: str
 
 export default function agentOffice(pi: Pi) {
   pi.registerCommand('office', {
-    description: '에이전트 사무실: 인자 없이 평면도 켜고 끄기, side(오른쪽 사이드바 켜고 끄기), menu(메뉴 화면), export [json|csv] [<폴더>](내보내기), dept [<종류> <부서>|<종류> reset](부서 배치), playbook [<부서> adopt <n|all>|<부서> drop <n>](부서 지침), report [today|week], hr [<별칭>], rate <별칭> good|bad|clear, budget, approval·reorg·hr on|off',
+    description: '에이전트 사무실: 인자 없이 평면도 켜고 끄기, side(오른쪽 사이드바 켜고 끄기), menu(메뉴 화면), journal [today|week|<별칭>](업무 일지), journal save on|off(일지를 날마다 파일로, 기본 꺼짐), export [json|csv|journal] [<폴더>](내보내기), dept [<종류> <부서>|<종류> reset](부서 배치), playbook [<부서> adopt <n|all>|<부서> drop <n>](부서 지침), report [today|week], hr [<별칭>], rate <별칭> good|bad|clear, budget, approval·reorg·hr on|off',
     handler: async (args: string, ctx: Ctx) => {
       const a = (args ?? '').trim()
       if (a === '') {
@@ -595,18 +616,42 @@ export default function agentOffice(pi: Pi) {
         return
       }
       if (a.toLowerCase() === 'menu') return openMenu(ctx, 'hr')
+      // 업무 일지는 메뉴 화면으로(수십 건의 보고를 알림 하나로 띄우지 않도록)
+      const jw = /^journal(?:\s+(\S+))?$/i.exec(a)
+      const jview = jw === null ? null : journalViewFor(jw[1])
+      if (jview !== null) return openMenu(ctx, jview)
+      // 업무 일지를 날마다 파일로 남길지(기본 꺼짐)
+      const save = /^journal\s+save(?:\s+(\S+))?$/i.exec(a)
+      if (save !== null) {
+        const want = save[1]?.toLowerCase()
+        if (want !== 'on' && want !== 'off') {
+          ctx.ui?.notify?.(`일지 파일 저장: ${hr().isJournalSaving === true ? '켜짐' : '꺼짐'}. 쓰는 법: /office journal save on|off (켜면 ${join(HR_DIR, 'journal')}/<날짜>.md에 날마다 남김)`, 'info')
+          return
+        }
+        saveHr(b => ({ ...b, isJournalSaving: want === 'on' }))
+        if (want === 'on') writeDay(now())
+        ctx.ui?.notify?.(want === 'on' ? `업무 일지를 날마다 ${join(HR_DIR, 'journal')}/<날짜>.md에 남깁니다.` : '업무 일지 파일을 더 남기지 않습니다(이미 쓴 파일은 그대로, /office journal로는 계속 봅니다).', 'info')
+        changed()
+        return
+      }
       if (a.toLowerCase() === 'side') {
         const on = toggleSide()
         ctx.ui?.notify?.(on === null ? '사이드바를 띄울 수 없는 화면입니다(대화형 터미널에서만).' : on ? `사이드바를 켭니다(터미널 폭 ${SIDE_MIN_COLUMNS}칸 이상일 때 보임). 끄려면 /office side` : '사이드바를 끕니다.', 'info')
         return
       }
-      const text = await answerWith({ book: async () => hr(), save: async fn => void saveHr(fn), agents: async () => [...agents.values()], now: async () => now(), write: async (files, dir) => writeExports(files, dir), approverName: () => { const m = approverOf(ctx); return m === undefined ? null : modelLabel(String(m.id ?? '')) } }, a)
+      const text = await answerWith({ book: async () => hr(), save: async fn => void saveHr(fn), agents: async () => [...agents.values()], now: async () => now(), write: async (files, dir) => writeExports(files, dir), journal: async () => journalList(), approverName: () => { const m = approverOf(ctx); return m === undefined ? null : modelLabel(String(m.id ?? '')) } }, a)
       if (text === null) {
-        ctx.ui?.notify?.(`모르는 명령입니다: /office ${a}. 쓰는 법: /office [menu | side | export [json|csv] | dept [<종류> <부서>] | report today|week | hr [<별칭>] | rate <별칭> good|bad|clear | budget | playbook | approval|reorg|hr on|off]`, 'warning')
+        ctx.ui?.notify?.(`모르는 명령입니다: /office ${a}. 쓰는 법: /office [menu | side | journal [today|week|<별칭>] | journal save on|off | export [json|csv|journal] | dept [<종류> <부서>] | report today|week | hr [<별칭>] | rate <별칭> good|bad|clear | budget | playbook | approval|reorg|hr on|off]`, 'warning')
         return
       }
       // 대표 평가·결재 설정으로 후보가 바뀌었을 수 있다
       checkProposals(ctx)
+      // 대표 평가가 바뀌면 그 일의 날짜 일지 파일도 다시 쓴다
+      if (/^rate\s/i.test(a)) {
+        // 날짜마다 한 번(그날의 아무 시각이나 넘기면 그날 파일을 쓴다)
+        const days = new Map(journalList().slice(0, 50).map(e => [dayOf(e.endedAt), e.endedAt]))
+        for (const at of days.values()) writeDay(at)
+      }
       changed()
       // 보고서·명부·인사카드는 메뉴 화면에 표로(사용법 안내나 켜고 끄기 답은 알림으로)
       const [sub, arg] = a.split(/\s+/).map(x => x.toLowerCase())

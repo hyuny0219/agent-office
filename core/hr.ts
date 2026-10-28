@@ -236,7 +236,7 @@ export function migrate(stored: unknown): HrBook | null {
     })
     .slice(0, MAX_LOG)
   // 아래에서 다시 읽는 칸은 저장된 그대로 남기지 않는다(모양이 틀린 값이 살아남지 않도록)
-  const { playbooks: _p, deptMap: _m, budgetWaivers: _w, archive: _a, proposalsTold: _t, proposalsSeen: _s, tokenBudgets: _tb, ...keep } = v
+  const { playbooks: _p, deptMap: _m, budgetWaivers: _w, archive: _a, proposalsTold: _t, proposalsSeen: _s, tokenBudgets: _tb, isJournalSaving: _js, ...keep } = v
   return {
     ...keep, version: 2, employees, lessons, handoffs, trials, log, retired,
     isCoaching: v.isCoaching !== false, isTrialing: v.isTrialing !== false, isApproving: v.isApproving !== false, isApprovalNoticed: v.isApprovalNoticed === true, trialSeq: num(v.trialSeq, 0),
@@ -244,6 +244,7 @@ export function migrate(stored: unknown): HrBook | null {
     budgets: perDept(v.budgets, x => x > 0), budgetNotices: perDept(v.budgetNotices, () => true),
     ...(playbooksOf(v.playbooks)),
     ...(deptMapOf(v.deptMap)), ...(Object.keys(waivers).length === 0 ? {} : { budgetWaivers: waivers }), ...(Object.keys(tokenBudgets).length === 0 ? {} : { tokenBudgets }), ...(archive === undefined ? {} : { archive }),
+    ...(v.isJournalSaving === true ? { isJournalSaving: true } : {}),
     ...(told === undefined ? {} : { proposalsTold: told }), ...(seen === undefined ? {} : { proposalsSeen: seen }),
   }
 }

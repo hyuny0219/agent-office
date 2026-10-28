@@ -1,4 +1,4 @@
-// 사무실 메뉴 화면. 사무실 패널과 따로 여는 패널로, 위의 1~7 메뉴를 고르면 그 내용을 패널 안에 표(마크다운)로 보인다.
+// 사무실 메뉴 화면. 사무실 패널과 따로 여는 패널로, 위의 1~8 메뉴를 고르면 그 내용을 패널 안에 표(마크다운)로 보인다.
 // 무엇을 보고 있는지는 상태(menuView)에 둔다. 여기에는 메뉴 목록과 화면별 내용(블록)만 둔다.
 import type { EngineInterface } from 'claude-code'
 
@@ -10,14 +10,15 @@ import { adopt, dropRule, playbookBlocks, proposalsOf, roomOf, settled } from '.
 import type { Proposal } from '../core/playbook'
 import { archiveBlocks, cardBlocks, deptMapBlocks, findEmployee, knownTypesOf, reportBlocks, rosterBlocks } from '../core/report'
 import type { Block } from '../core/table'
-import { agentsOf, saveHr } from './store'
+import { agentsOf, journalEntries, saveHr } from './store'
+import { journalBlocks, journalViewOf } from '../core/journal'
 import { checkProposals } from './flow'
 import { APPROVER_MODEL } from '../core/approval'
 
 export const MENU_PANE = 'agent-office-menu'
 export const MENU_TITLE = '사무실 메뉴'
 
-/** 메뉴: 단축키 1~7. view는 상태에 두는 화면 이름 */
+/** 메뉴: 단축키 1~8. view는 상태에 두는 화면 이름 */
 export const MENU = [
   { key: 'menu-hr', hotkey: '1', label: '인사 명부', view: 'hr' },
   { key: 'menu-today', hotkey: '2', label: '일간 보고', view: 'today' },
@@ -26,6 +27,7 @@ export const MENU = [
   { key: 'menu-settings', hotkey: '5', label: '설정', view: 'settings' },
   { key: 'menu-playbook', hotkey: '6', label: '지침', view: 'playbook' },
   { key: 'menu-archive', hotkey: '7', label: '기록', view: 'archive' },
+  { key: 'menu-journal', hotkey: '8', label: '일지', view: 'journal' },
 ] as const
 
 /** 인사카드 화면의 이름: card:<별칭> */
@@ -85,6 +87,8 @@ export async function viewBlocks($: EngineInterface, b: HrBook, view: string): P
   }
   if (view === 'playbook') return playbookBlocks(b, now)
   if (view === 'archive') return archiveBlocks(b)
+  const jv = journalViewOf(view)
+  if (jv !== null) return journalBlocks(b, await journalEntries($), now, jv)
   if (view === 'settings') return [{ t: 'title', text: '설정' }, { t: 'line', text: '누르면 바로 켜고 끕니다.' }]
   return rosterBlocks(b, now)
 }

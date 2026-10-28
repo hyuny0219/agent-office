@@ -259,3 +259,59 @@ test('지침 후보 알림: 새 후보가 오르면 토스트·메신저로 한 
   expect(d.toasts.filter(t => t.includes('개발팀 지침 후보')).length).toBe(1)
   expect(await pane.find({ key: 'playbook-alert' })).toBeUndefined()
 })
+
+test('업무 일지: 끝낸 일이 결재 의견까지 일지에 남고, /office journal로 보며, /office export journal로 마크다운 파일을 쓰고, 메뉴 8에 보인다', async ($, on) => {
+  const d = desk(on)
+  on('session.cwd', () => ({ value: '/work/proj' }))
+  const written = new Map<string, string>()
+  on('fs.write', (_$, e) => {
+    written.set(e.path, e.text)
+    return { value: undefined }
+  })
+  on('agent.spawn', () => ({ model: 'm', agentId: 'c1' }))
+  let status: 'running' | 'completed' = 'running'
+  on('agent.list', () => ({ value: [{ id: 'c1', description: '로그인 버그 고치기', type: 'builder', status }] }))
+  on('model.complete', () => ({ value: { isAnswered: true, text: '승인\n- 테스트 결과가 보고에 있다', usage: { input_tokens: 1, output_tokens: 1 } } }) as never)
+  on('tool.call', (_$, e) => {
+    if (e.tool === 'Bash') return { result: 'ok', text: '12 passed' } as never
+    return { result: 'ok' }
+  })
+  on('turn.complete', () => ({ text: '' }))
+  await $.agent.spawn({ tool_use_id: 't1', prompt: '로그인 버그를 고쳐', description: '로그인 버그 고치기', subagentType: 'builder', ...SPAWN })
+  for (const f of ['a', 'b', 'c']) await $.tool.call({ tool: 'Read', file_path: `/r/${f}.ts`, agentId: 'c1' } as never)
+  await $.tool.call({ tool: 'Edit', file_path: '/r/src/login.ts', old_string: 'x', new_string: 'y', agentId: 'c1' } as never)
+  await $.tool.call({ tool: 'Bash', command: 'npm test', description: '테스트', agentId: 'c1' } as never)
+  status = 'completed'
+  await $.turn.complete({ answer: '로그인 버그를 고쳤고 npm test가 통과했습니다.', durationMs: 1, isAborted: false, turnId: 'z', agentId: 'c1', reason: 'answer' })
+  // 결재가 끝나도록 한 번 더 돈다
+  await $.tool.call({ tool: 'Read', file_path: '/r/x.ts' } as never)
+  // 일지 본문은 명령 답(대화 기록)으로 내지 않고 메뉴 화면 8에만 연다
+  const answered = text(await $.command.run({ command: 'office', args: 'journal', ...RUN }))
+  expect(answered).toBe('메뉴 화면에 업무 일지를 열었습니다(8 일지).')
+  expect(answered).not.toContain('로그인 버그를 고쳤고')
+  const ui0 = await $.ui.mount({ plugin: 'agent-office', surface: 'terminal', component: 'Pane', requestId: 'agent-office-menu', props: MENU_PROPS, viewport: { columns: 120, rows: 60 } })
+  const shown = JSON.stringify(await ui0.find({ key: 'menu-body' }))
+  expect(shown).toContain('업무 일지: 오늘')
+  expect(shown).toContain('로그인 버그 고치기')
+  expect(shown).toContain('고친 파일 1개: src/login.ts')
+  expect(shown).toContain('npm test — 통과')
+  expect(shown).toContain('결재: 승인')
+  expect(shown).toContain('테스트 결과가 보고에 있다')
+  expect(shown).toContain('로그인 버그를 고쳤고 npm test가 통과했습니다.')
+  await $.command.run({ command: 'office', args: 'journal BEAR', ...RUN })
+  expect(JSON.stringify(await ui0.find({ key: 'menu-body' }))).toContain('업무 일지: BEAR')
+  expect(text(await $.command.run({ command: 'office', args: 'journal 이상한', ...RUN }))).toContain('쓰는 법: /office journal')
+  // 일지는 인사 기록과 따로 저장된다
+  expect(d.book()?.log.length).toBe(1)
+  // 폴더를 주면 그곳에
+  expect(text(await $.command.run({ command: 'office', args: 'export journal today /tmp/out', ...RUN }))).toMatch(/- \/tmp\/out\/agent-office-\d{8}-\d{6}-journal-today\.md/)
+  const saved = text(await $.command.run({ command: 'office', args: 'export journal week', ...RUN }))
+  expect(saved).toMatch(/업무 일지를 내보냈습니다:\n- \/work\/proj\/agent-office-export\/agent-office-\d{8}-\d{6}-journal-week\.md/)
+  const md = [...written.entries()].find(([k]) => k.endsWith('-journal-week.md'))?.[1] ?? ''
+  expect(md).toContain('## 업무 일지: 이번 주')
+  expect(md).toContain('> 로그인 버그를 고쳤고 npm test가 통과했습니다.')
+  // 메뉴 8 버튼으로도
+  await ui0.press({ key: 'menu-hr' })
+  await ui0.press({ key: 'menu-journal' })
+  expect(JSON.stringify(await ui0.find({ key: 'menu-body' }))).toContain('로그인 버그 고치기')
+})
