@@ -1,7 +1,7 @@
 // 업무 흐름. 엔진이 알려 주는 에이전트 상태를 사무실로 옮기고(끝남·실패·대기), 끝낸 일을 평가해 인사 기록에 남기고,
 // 보고를 결재에 올리고, 근태(같은 실수 연발·제자리걸음·야근)와 재작업을 본다. 결정은 순수 함수 모듈에 맡기고
 // 여기서는 그 결과를 상태·인사 기록·토스트·메신저로 옮긴다.
-import type { EngineInterface } from 'claude-code'
+import type { AgentInfo, EngineInterface } from 'claude-code'
 
 import type { Dept, OfficeActivity, OfficeAgent, Streak, TrialTicket } from '../types'
 import { CHECK_PENALTY, decide, DEPT_INFO, DEPTS, deptFor, gradeOf, handOff, hire, lessonsFor, warn, rankOf, record, review, rework, REWORK_PENALTY, salaryOf } from '../core/hr'
@@ -17,7 +17,7 @@ import { addNote, markRejected, noteOf } from '../core/notes'
 import { markSeen, proposalNotices, tellProposals } from '../core/playbook'
 import { anyBudget, BUDGET_CHOICES, budgetDenyText, budgetQuestion, choiceOf, gateOf, noticed, overrunsOf, overrunText, waive } from '../core/budget'
 import type { BudgetChoice, Overrun } from '../core/budget'
-import { admit, agentsOf, fresh, hold, hrOf, keptNow, MEET_MS, meet, nickOfId, patch, release, save, saveHr, saveJournal, speak } from './store'
+import { admit, agentsOf, ensure, fresh, hold, hrOf, keptNow, MEET_MS, meet, nickOfId, patch, release, releaseStaffed, save, saveHr, saveJournal, speak, staff } from './store'
 import { addEntry, entryOf, noteApproval } from '../core/journal'
 
 /** 파일을 고치는 도구(재작업 판정에 쓴다) */
@@ -29,6 +29,79 @@ export const fileOf = (e: object): string | null => {
 }
 const baseName = (f: string): string => f.split(/[\\/]/).pop() ?? f
 export { isCheckCommand }
+
+/**
+ * 띄웠지만 아직 사무실에 못 들인 일: 띄우기 결과에 agentId가 없으면(백그라운드로 띄운 에이전트 등) 띄우기 훅이 정한 것
+ * (직원·배정 사유·교육 효과 측정·지시)을 여기 두고, 그 에이전트가 처음 보일 때 종류·업무 설명으로 짝지어 들인다.
+ * 짝짓기 전까지 그 직원은 배정 대기로 붙잡아 둔다
+ */
+export type PendingSpawn = { type: string; description: string; nick: string; parentId: string; task: string; model: string | null; trial?: TrialTicket; at: number; name?: string }
+let pendings: PendingSpawn[] = []
+/** 이만큼 지나도 나타나지 않은 일은 버린다(직원을 놓는다) */
+const PENDING_MS = 5 * 60_000
+export const holdPending = (p: PendingSpawn) => {
+  pendings = [...pendings, p]
+}
+/** 기다리는 일을 거둔다. 아직 있었으면 true(없으면 그 에이전트가 먼저 보여 이미 짝지어 들였다) */
+export function dropPending(p: PendingSpawn): boolean {
+  const had = pendings.includes(p)
+  pendings = pendings.filter(x => x !== p)
+  return had
+}
+export function prunePendings(now: number) {
+  const old = pendings.filter(p => now - p.at > PENDING_MS)
+  if (old.length === 0) return
+  pendings = pendings.filter(p => !old.includes(p))
+  for (const p of old) releaseStaffed(p.nick)
+}
+
+/** 같은 에이전트를 나란히 들이지 않게(첫 사건과 도구 호출이 함께 와도 한 번만 뽑는다) */
+const entering = new Map<string, Promise<void>>()
+
+/**
+ * 처음 보이는 에이전트를 사무실에 들인다: 띄우기 훅이 정한 일이 기다리고 있으면 그 직원으로, 아니면 엔진이 아는 종류·업무 설명으로
+ * 적임자를 뽑는다(종류를 모른 채 "agent"로 들여 지원팀 직원을 새로 뽑지 않도록). 엔진 목록에도 없으면 예전처럼 들인다
+ */
+export function enterAgent($: EngineInterface, id: string, known?: AgentInfo): Promise<void> {
+  const running = entering.get(id)
+  if (running !== undefined) return running
+  const p = enterOnce($, id, known).finally(() => entering.delete(id))
+  entering.set(id, p)
+  return p
+}
+
+async function enterOnce($: EngineInterface, id: string, known?: AgentInfo) {
+  if (id === 'main' || (await agentsOf($)).some(a => a.id === id)) return ensure($, id)
+  const now = await $.clock.now()
+  prunePendings(now)
+  const info = known ?? (await $.agent.list()).find(i => i.id === id)
+  if (info === undefined) return ensure($, id)
+  const parentId = info.parentId ?? 'main'
+  // 이름(Agent의 name)이 있으면 이름으로 먼저, 없으면 종류·업무 설명·띄운 쪽으로 짝짓는다
+  const same = pendings.filter(p => p.type === info.type && p.description === info.description && p.parentId === parentId)
+  // 이름이 어긋나면(엔진이 이름 뒤에 꼬리를 붙이기도 한다) 이름 없이 띄운 일을 먼저
+  const p = same.find(x => x.name !== undefined && x.name === info.name) ?? same.find(x => x.name === undefined) ?? same[0]
+  if (p === undefined) {
+    // 띄우기 훅이 정한 것이 없으면 엔진이 아는 종류·업무 설명으로 적임자를 뽑는다
+    const { employee } = await staff($, info.type, info.description)
+    try {
+      await admit($, { ...fresh(id, info.type, info.description, now), name: info.name ?? null, parentId }, employee.nick)
+    } finally {
+      releaseStaffed(employee.nick)
+    }
+    return
+  }
+  pendings = pendings.filter(x => x !== p)
+  papers.set(id, { ...papers.get(id), task: p.task })
+  // 같은 종류·설명으로 나란히 띄운 일이 더 있으면 어느 지시의 짝인지 확실하지 않다: 교육 효과 측정을 붙이지 않는다(통계가 섞이지 않도록)
+  const isSure = same.length === 1 || (p.name !== undefined && p.name === info.name)
+  try {
+    await admit($, { ...fresh(id, p.type, p.description, p.at), model: p.model, name: info.name ?? null, parentId, ...(isSure ? { trial: p.trial } : {}) }, p.nick)
+  } finally {
+    // 사무실에 들였으니(이제 일하는 사람으로 보인다) 배정 대기를 푼다
+    releaseStaffed(p.nick)
+  }
+}
 
 /** 결재에 쓸 지시·보고(에이전트 id →). 패널이 구독하는 상태에 두지 않는다: 길어서 쓸 때마다 패널로 실려 간다 */
 export const papers = new Map<string, { task?: string; report?: string }>()
@@ -357,6 +430,8 @@ export function syncStatus($: EngineInterface): Promise<void> {
 async function syncOnce($: EngineInterface) {
   const infos = await $.agent.list()
   const now = await $.clock.now()
+  // 나타나지 않은 띄우기는 여기서도 치운다(처음 보는 에이전트가 더 없어도 직원을 계속 붙잡지 않도록)
+  prunePendings(now)
   const known = await agentsOf($)
   const reports: [string, string][] = []
   const finished: { a: OfficeAgent; isDone: boolean; isKilled: boolean }[] = []
@@ -396,7 +471,8 @@ async function syncOnce($: EngineInterface) {
         }
         return list
       })
-      for (const i of newcomers) await admit($, { ...fresh(i.id, i.type, i.description, now), name: i.name ?? null, parentId: i.parentId ?? 'main' })
+      // 띄우기 훅이 정한 일이 기다리고 있으면 그 직원으로 들인다
+      for (const i of newcomers) await enterAgent($, i.id, i)
       // 메신저에는 보고 앞부분
       for (const [childId, parentId] of reports) {
         const child = (await agentsOf($)).find(a => a.id === childId)

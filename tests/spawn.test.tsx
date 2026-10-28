@@ -1,7 +1,7 @@
 // 훅 테스트(엔진을 흉내 낸 하네스에서): 띄우기·평가·근태·교육 효과·인사 메모 끄기.
 import { expect, test } from 'claude-code/testing'
 
-import { emptyBook, hire, learn } from '../core/hr'
+import { emptyBook, hire, learn, migrate } from '../core/hr'
 import { OVERTIME_MS } from '../core/watch'
 import { agent, PROPS, RUN, SPAWN } from './kit'
 
@@ -288,4 +288,61 @@ test('/office hr off면 업무 지시를 건드리지 않고, 평가·명부는 
   const roster = JSON.stringify(await $.command.run({ command: 'office', args: 'hr', ...RUN }))
   expect(roster).toContain('품질팀')
   expect(roster).toMatch(/HAWK 매\s+사원/)
+})
+
+test('배정: 띄우기 결과에 id가 없어도(백그라운드) 처음 보일 때 정한 직원으로 들이고, 종류를 몰라 지원팀 직원을 새로 뽑지 않는다', async ($, on) => {
+  const store = new Map<string, unknown>()
+  on('store.get', (_$, e) => ({ value: store.get(e.key) }))
+  on('store.set', (_$, e) => {
+    store.set(e.key, e.value)
+    return { value: undefined }
+  })
+  on('clock.now', () => ({ value: 5000 }))
+  on('ui.toast', () => ({ value: undefined }))
+  let prompt = ''
+  // 백그라운드 띄우기: 결과에 agentId가 없다
+  on('agent.spawn', (_$, e) => {
+    prompt = e.prompt
+    return { model: 'claude-sonnet-5-5' }
+  })
+  let status: 'running' | 'completed' = 'running'
+  on('agent.list', () => ({ value: [{ id: 'bg1', description: '문서 정리', type: 'oh-my-claudecode:writer', status }] }))
+  on('tool.call', () => ({ result: 'ok' }))
+  on('turn.complete', () => ({ text: '' }))
+  await $.agent.spawn({ tool_use_id: 't1', prompt: 'README를 정리해', description: '문서 정리', subagentType: 'oh-my-claudecode:writer', ...SPAWN })
+  expect(prompt).toContain('담당: 문서팀')
+  const chosen = /담당: 문서팀 (\S+)/.exec(prompt)?.[1]
+  // 처음 보이는 사건(첫 도구 호출)
+  await $.tool.call({ tool: 'Read', file_path: '/r/README.md', agentId: 'bg1' } as never)
+  status = 'completed'
+  await $.turn.complete({ answer: '정리했습니다', durationMs: 1, isAborted: false, turnId: 'z', agentId: 'bg1', reason: 'answer' })
+  const hr = migrate(store.get('hr'))
+  expect(hr?.employees.map(e => [e.nick, e.dept, e.jobs])).toEqual([[chosen, 'docs', 1]])
+  expect(hr?.log[0]?.description).toBe('문서 정리')
+})
+
+test('배정: 띄운 에이전트의 첫 사건이 띄우기 훅보다 먼저 와도 정한 직원으로 들이고, 엔진 목록에만 있는 에이전트는 제 종류로 뽑는다', async ($, on) => {
+  const store = new Map<string, unknown>()
+  on('store.get', (_$, e) => ({ value: store.get(e.key) }))
+  on('store.set', (_$, e) => {
+    store.set(e.key, e.value)
+    return { value: undefined }
+  })
+  on('clock.now', () => ({ value: 5000 }))
+  on('ui.toast', () => ({ value: undefined }))
+  const list = [{ id: 'e1', description: '조사', type: 'Explore', status: 'running' as const }]
+  on('agent.list', () => ({ value: list }))
+  on('tool.call', () => ({ result: 'ok' }))
+  // 띄우기가 끝나기 전에 그 에이전트가 도구를 부른다
+  on('agent.spawn', async () => {
+    await $.tool.call({ tool: 'Grep', pattern: 'x', agentId: 'e1' } as never)
+    return { model: 'm', agentId: 'e1' }
+  })
+  await $.agent.spawn({ tool_use_id: 't1', prompt: '찾아', description: '조사', subagentType: 'Explore', ...SPAWN })
+  const hr = migrate(store.get('hr'))
+  expect(hr?.employees.map(e => e.dept)).toEqual(['research'])
+  // 띄우기 훅을 거치지 않은 에이전트(이 mod가 불러와지기 전에 뜬 것)도 엔진 목록의 종류·설명으로 뽑는다
+  list.push({ id: 'q1', description: '검토', type: 'oh-my-claudecode:code-reviewer', status: 'running' })
+  await $.tool.call({ tool: 'Read', file_path: '/r/a.ts', agentId: 'q1' } as never)
+  expect(migrate(store.get('hr'))?.employees.map(e => e.dept).sort()).toEqual(['qa', 'research'])
 })

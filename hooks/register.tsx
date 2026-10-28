@@ -1,6 +1,7 @@
 // 에이전트 사무실 mod의 훅. 엔진의 사건(세션 시작·명령·에이전트 띄우기·턴·도구 호출·그리기)을
 // 업무 흐름(flow)·상태(store)·화면(view)·명령(commands)으로 잇는다. 도구 호출은 관찰만 하고 막지 않는다.
 import type { Register } from 'claude-code'
+import type { PendingSpawn } from './flow'
 
 import type { Bubble, Dept, OfficeAgent, TrialTicket, Utterance } from '../types'
 import { briefOf, learn, lessonKey, lessonsFor } from '../core/hr'
@@ -8,7 +9,7 @@ import { checkRunOf, errLineOf, messageOf, oopsOf, orderOf, replyOf, selfTalkOf 
 import { enroll, errorLessonKey, markHit } from '../core/trial'
 import { activityOf, layoutOf } from '../core/scene'
 import { answer, COMMAND } from './commands'
-import { awaitApproval, checkBudget, checkFollowUp, checkProposals, gateSpawn, seePlaybook, checkRework, EDIT_TOOLS, fileOf, isCheckCommand, papers, reorganize, reviewPlan, syncStatus, takeNotes, watch } from './flow'
+import { awaitApproval, checkBudget, checkFollowUp, checkProposals, dropPending, enterAgent, gateSpawn, holdPending, seePlaybook, checkRework, EDIT_TOOLS, fileOf, isCheckCommand, papers, reorganize, reviewPlan, syncStatus, takeNotes, watch } from './flow'
 import { usageOf } from '../core/tokens'
 import { playbookLines, proposalAlert } from '../core/playbook'
 import { journalViewFor } from '../core/journal'
@@ -73,6 +74,8 @@ export const register: Register = (on, options) => {
     if (denied !== null) return { deny: denied }
     // staff가 고른 직원을 붙잡아 둔다: 사무실에 들어올 때까지 조직 개편이 내보내거나 나란히 뜬 다른 일이 같은 직원을 고르지 않도록
     const { employee, why } = await staff($, e.subagentType, e.description)
+    /** id를 몰라 기다리는 일로 넘겼으면 짝지어 들일 때 직원을 놓는다 */
+    let isPending = false
     try {
       const at = await $.clock.now()
       let brief: string | null = null
@@ -93,27 +96,60 @@ export const register: Register = (on, options) => {
         // 부서 지침도 비교군에는 실수에서 온 지침을 뺀다
         brief = briefOf(book, employee, at, arm === 'control' ? [] : lessons, why, briefNotes(book, book.employees.find(x => x.nick === employee.nick) ?? employee, e.description, arm === 'control'), playbookLines(book, employee.dept, arm === 'control'))
       }
-      const spawned = await next(brief === null ? e : { ...e, prompt: `${e.prompt}\n\n${brief}` })
-      if (spawned.deny !== undefined || spawned.agentId === undefined) return spawned
-      const id = spawned.agentId
       const parentId = e.parentAgentId ?? 'main'
+      // 띄우기 전에 정한 일을 기다리는 일로 둔다: 띄운 에이전트의 첫 사건이 이 훅보다 먼저 오거나, 결과에 id가 없어도(백그라운드 등)
+      // 그 에이전트가 처음 보일 때 이 직원으로 짝지어 들인다
+      const pending: PendingSpawn = { type: e.subagentType, description: e.description, nick: employee.nick, parentId, task: e.prompt.slice(0, 4000), model: null, trial, at, ...(e.name === undefined ? {} : { name: e.name }) }
+      holdPending(pending)
+      let spawned: Awaited<ReturnType<typeof next>>
+      try {
+        spawned = await next(brief === null ? e : { ...e, prompt: `${e.prompt}\n\n${brief}` })
+      } catch (err) {
+        dropPending(pending)
+        throw err
+      }
+      if (spawned.deny !== undefined) {
+        dropPending(pending)
+        return spawned
+      }
+      pending.model = spawned.model
+      // 기다리는 시간은 띄우기가 끝난 때부터 잰다(아래 훅이 승인 등으로 오래 붙잡아도 그 사이 버리지 않도록)
+      pending.at = await $.clock.now()
+      if (spawned.agentId === undefined) {
+        // 원격 워크플로 에이전트는 이 사무실에 나타나지 않는다: 기다리지 않고 직원을 놓는다
+        if (e.workflow !== undefined) {
+          dropPending(pending)
+          return spawned
+        }
+        // 처음 보일 때 짝지어 들이고 그때 직원을 놓는다(놓는 일을 넘겼음을 기다리기 전에 적는다)
+        isPending = true
+        const now = await $.clock.now()
+        await speak($, null, null, orderOf(await nickOfId($, parentId), employee.nick, e.description, e.prompt, now, why).line)
+        return spawned
+      }
+      const id = spawned.agentId
+      // 첫 사건이 먼저 와 이미 짝지어 들였으면(직원도 그때 놓았다) 회의실 장면과 메신저만. 들이는 중이면 끝나기를 기다린다
+      const isEntered = !dropPending(pending)
+      if (isEntered) isPending = true
+      if (isEntered) await enterAgent($, id)
       const now = await $.clock.now()
-      await ensure($, parentId)
-      papers.set(id, { task: e.prompt.slice(0, 4000) })
+      await enterAgent($, parentId)
+      papers.set(id, { ...papers.get(id), task: e.prompt.slice(0, 4000) })
       // 회의실에서 지시하고("BEAR, go!") 받는다("yes!")
       const order = orderOf(await nickOfId($, parentId), employee.nick, e.description, e.prompt, now, why)
-      await admit($, { ...fresh(id, e.subagentType, e.description, now), model: spawned.model, parentId, trial, say: replyOf('yes!', now) }, employee.nick,
+      if (isEntered) await save($, list => patch(id, a => ({ ...a, model: spawned.model, say: replyOf('yes!', now) }))(patch(parentId, a => ({ ...a, say: order.bubble }))(meet([parentId, id], now + MEET_MS)(list))))
+      else await admit($, { ...fresh(id, e.subagentType, e.description, now), model: spawned.model, parentId, trial, say: replyOf('yes!', now) }, employee.nick,
         list => patch(parentId, a => ({ ...a, say: order.bubble }))(meet([parentId, id], now + MEET_MS)(list)))
       await speak($, null, null, order.line)
       return spawned
     } finally {
-      releaseStaffed(employee.nick)
+      if (!isPending) releaseStaffed(employee.nick)
     }
   })
 
   on('turn.start', async ($, e, next) => {
     const id = e.agentId ?? 'main'
-    await ensure($, id)
+    await enterAgent($, id)
     await save($, patch(id, a => ({ ...a, activity: 'think', endedAt: id === 'main' ? null : a.endedAt })))
     return next(e)
   })
@@ -143,7 +179,7 @@ export const register: Register = (on, options) => {
   on('tool.call', async ($, e, next) => {
     const id = e.agentId ?? 'main'
     inflight.set(id, [...(inflight.get(id) ?? []), e.tool])
-    await ensure($, id)
+    await enterAgent($, id)
     const said = await $.clock.now()
     const me = await nickOfId($, id)
     // 말풍선은 지금, 메신저 줄은 실제로 돈 뒤에(거절되면 하지 않은 일이다). 지시(Agent)는 띄울 때 따로 말한다
