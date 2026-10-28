@@ -227,6 +227,8 @@ export type HrBook = {
   budgetNotices: Partial<Record<Dept, number>>
   /** 부서 지침(대표가 승인한 개선안): 그 부서 업무 지시에 붙는다 */
   playbooks?: Partial<Record<Dept, Playbook>>
+  /** 부서별 하루(최근 24시간) 토큰 수 한도(/office budget <부서> 2M): 가격을 모르는 모델(사내 모델 등)도 잴 수 있다 */
+  tokenBudgets?: Partial<Record<Dept, number>>
   /** 부서별로 예산 초과를 "계속"으로 넘긴 때(24시간 동안 새 일을 맡길 때 다시 묻지 않는다) */
   budgetWaivers?: Partial<Record<Dept, number>>
   /** 에이전트 종류(소문자, 접두어 뺀 이름) → 부서: 대표가 바꾼 배치(/office dept). 없는 종류는 기본 배치 */

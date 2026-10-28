@@ -47,14 +47,29 @@ export function priceOf(model: string): Price | null {
 const FAMILY = /(?:^|-)(fable|mythos|opus|sonnet|haiku)(?:-(\d{1,2})(?!\d)(?:-(\d{1,2})(?!\d))?)?/
 const OLD_FAMILY = /(?:^|-)(\d)(?:-(\d))?-(opus|sonnet|haiku)/
 
-/** 모델 이름을 짧게: claude-opus-5-5-20261001 → Opus 5.5, claude-3-5-haiku → Haiku 3.5, claude-3-opus → Opus 3, opus → Opus. 모르는 이름은 앞 12자 */
+/** 양자화·정밀도 꼬리(이름을 짧게 적을 때 뗀다): -nvfp4, -fp8, -awq, -gptq, -gguf, -int4, -q4_k_m, -bf16 … */
+const QUANT_TAIL = /[-_.](?:nv)?(?:fp|mxfp|int|w)\d+\w*$|[-_.](?:awq|gptq|gguf|exl2|bf16|fp16|mlx)$|[-_.]q\d\w*$/i
+
+/** Claude가 아닌 모델 이름을 짧게: provider/GLM-5.2-NVFP4 → GLM 5.2, qwen3-coder-30b-fp8 → Qwen 3. 꼴을 모르면 null */
+function otherLabel(model: string): string | null {
+  let name = (model.split('/').pop() ?? model).trim()
+  for (let i = 0; i < 3 && QUANT_TAIL.test(name); i++) name = name.replace(QUANT_TAIL, '')
+  const m = /^([a-z]+)[-_ ]?(\d+(?:\.\d+)?[a-z]?(?![a-z]))/i.exec(name)
+  if (m === null) return null
+  const family = m[1] ?? ''
+  // 짧은 이름(GLM·GPT)은 대문자로, 긴 이름(qwen·llama)은 첫 글자만
+  const shown = family.length <= 3 ? family.toUpperCase() : `${family[0]?.toUpperCase()}${family.slice(1).toLowerCase()}`
+  return `${shown} ${m[2]}`
+}
+
+/** 모델 이름을 짧게: claude-opus-5-5-20261001 → Opus 5.5, claude-3-5-haiku → Haiku 3.5, claude-3-opus → Opus 3, opus → Opus, GLM-5.2-NVFP4 → GLM 5.2. 모르는 이름은 앞 12자 */
 export function modelLabel(model: string): string {
   const m = model.toLowerCase().replace(/[.\s]/g, '-').replace(/^claude-/, '').replace(/\[.*\]$/, '')
   const cap = (f: string) => f[0]?.toUpperCase() + f.slice(1)
   const old = m.match(OLD_FAMILY)
   if (old !== null) return `${cap(old[3] ?? '')} ${old[1]}${old[2] === undefined ? '' : `.${old[2]}`}`
   const hit = m.match(FAMILY)
-  if (hit === null) return model.slice(0, 12)
+  if (hit === null) return otherLabel(model) ?? model.slice(0, 12)
   const [, family = '', major, minor] = hit
   return major === undefined ? cap(family) : `${cap(family)} ${major}${minor === undefined ? '' : `.${minor}`}`
 }

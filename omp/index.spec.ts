@@ -12,9 +12,12 @@ let answer = '적합'
 let calls = 0
 /** 걸어 두면 결재자 답을 그때까지 늦춘다 */
 let gate: Promise<void> | null = null
+/** 마지막으로 결재자를 부른 모델과 옵션 */
+let lastCall: { model: any; options: any } | null = null
 mock.module('@oh-my-pi/pi-ai', () => ({
-  completeSimple: async () => {
+  completeSimple: async (model: any, _req: any, options: any) => {
     calls++
+    lastCall = { model, options }
     if (gate !== null) await gate
     return { content: [{ type: 'text', text: answer }], usage: {} }
   },
@@ -120,5 +123,57 @@ describe('계획 검토', () => {
     await fire('plan_review_requested', { reviewId: 'r4', planContent: '계획' })
     await settle()
     expect(calls).toBe(before)
+  })
+})
+
+describe('사내 모델(GLM만 쓸 수 있을 때)', () => {
+  const glm = { id: 'GLM-5.2-NVFP4', cost: { input: 0, output: 0, cacheRead: 0 } }
+  test('Haiku가 없으면 세션 모델이 결재하고, 추론을 끄며, 생각 블록이 섞인 답도 읽는다', async () => {
+    const { saveHr } = await import('./store')
+    saveHr(b => ({ ...b, isApproving: true }))
+    const was = { resolve: ctx.models.resolve, current: ctx.models.current }
+    ctx.models.resolve = (spec: string) => (/glm/i.test(spec) ? glm : undefined)
+    ctx.models.current = () => glm
+    answer = '<think>\n계획에 테스트 단계가 없다.\n</think>\n보완\n- 테스트 단계를 넣을 것'
+    await fire('plan_review_requested', { reviewId: 'glm', planContent: '계획' })
+    await settle()
+    expect(lastCall?.model.id).toBe('GLM-5.2-NVFP4')
+    expect(lastCall?.options.disableReasoning).toBe(true)
+    expect(notified.some(t => t.includes('계획 검토: 보완 · 테스트 단계를 넣을 것'))).toBe(true)
+    try {
+      // Haiku가 아니면 답 한도를 넉넉히(끄는 옵션이 안 먹혀도 생각 뒤에 답할 자리)
+      expect(lastCall?.options.maxTokens).toBe(1_500)
+      // AGENT_OFFICE_APPROVER로 고른 모델이 먼저
+      process.env.AGENT_OFFICE_APPROVER = 'glm-5.2'
+      ctx.models.current = () => ({ id: 'other' })
+      await fire('plan_review_requested', { reviewId: 'env', planContent: '계획' })
+      await settle()
+      expect(lastCall?.model.id).toBe('GLM-5.2-NVFP4')
+    } finally {
+      delete process.env.AGENT_OFFICE_APPROVER
+      Object.assign(ctx.models, was)
+    }
+  })
+
+  test('가격표에 없는 모델은 omp 모델 목록의 가격으로 비용을 세고, 가격이 0이면 가격 모름 토큰으로 적는다(토큰 예산으로 잰다)', async () => {
+    const { agents } = await import('./store')
+    const was = ctx.models.resolve
+    const usage = { input: 1_000_000, output: 0, cacheRead: 0, cacheWrite: 0 }
+    ctx.models.resolve = (spec: string) => (spec === 'priced-model' ? { id: spec, cost: { input: 2, output: 8, cacheRead: 0.5 } } : glm)
+    const before = agents.get('main')?.tokens
+    await fire('message_end', { message: { role: 'assistant', model: 'priced-model', usage } })
+    const mid = agents.get('main')?.tokens
+    expect((mid?.usd ?? 0) - (before?.usd ?? 0)).toBeCloseTo(2, 5)
+    try {
+      await fire('message_end', { message: { role: 'assistant', model: 'GLM-5.2-NVFP4', usage } })
+      const after = agents.get('main')?.tokens
+      expect((after?.usd ?? 0) - (mid?.usd ?? 0)).toBe(0)
+      expect((after?.unpriced ?? 0) - (mid?.unpriced ?? 0)).toBe(1_000_000)
+      // omp가 셈한 비용(usage.cost.total)이 있으면 그것을 쓴다
+      await fire('message_end', { message: { role: 'assistant', model: 'GLM-5.2-NVFP4', usage: { ...usage, cost: { total: 0.5 } } } })
+      expect((agents.get('main')?.tokens?.usd ?? 0) - (after?.usd ?? 0)).toBeCloseTo(0.5, 5)
+    } finally {
+      ctx.models.resolve = was
+    }
   })
 })

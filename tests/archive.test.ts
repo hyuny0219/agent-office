@@ -116,7 +116,7 @@ test('예산 조치: 한도를 넘은 부서는 맡기기 전에 묻고, "계속
   const b = { ...record(emptyBook(), spent(3)), budgets: { dev: 2 } }
   expect(gateOf(b, [], 'qa', 2000)).toBeNull()
   expect(gateOf({ ...b, budgets: { dev: 5 } }, [], 'dev', 2000)).toBeNull()
-  expect(gateOf(b, [], 'dev', 2000)).toEqual({ dept: 'dev', spent: 3, budget: 2 })
+  expect(gateOf(b, [], 'dev', 2000)).toEqual({ dept: 'dev', spent: 3, budget: 2, unit: 'usd' })
   // 일하는 중인 사람이 쓴 것도 든다
   expect(gateOf({ ...b, budgets: { dev: 4 } }, [agent('c1', { tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, usd: 1.5, unpriced: 0 } })], 'dev', 2000)?.spent).toBe(4.5)
   const waived = waive(b, 'dev', 2000)

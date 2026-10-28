@@ -1,10 +1,10 @@
-// 부서 예산. 부서마다 하루(최근 24시간) 비용 한도를 두고, 넘으면 하루에 한 번 알린다. 비용은 모델 API 정가로 어림한 달러로,
+// 부서 예산. 부서마다 하루(최근 24시간) 비용 한도(달러)나 토큰 수 한도를 두고, 넘으면 하루에 한 번 알린다. 비용은 모델 API 정가로 어림한 달러로,
 // 끝낸 일의 기록(일한 것과 그 일의 결재)과 지금 일하는 사람이 쓴 것을 더한다. 순수 함수만 둔다.
-import type { Dept, HrBook, OfficeAgent } from '../types'
+import type { Dept, HrBook, OfficeAgent, TokenUse } from '../types'
 import { textOf } from './table'
 import type { Block } from './table'
 import { DEPT_INFO, DEPTS } from './hr'
-import { usdText } from './tokens'
+import { tokenText, usdText } from './tokens'
 
 /** 예산을 재는 기간: 최근 24시간(보고서의 "오늘"과 같다) */
 export const BUDGET_MS = 24 * 60 * 60_000
@@ -30,17 +30,49 @@ export function spentOf(book: HrBook, agents: readonly OfficeAgent[], dept: Dept
   return done + running
 }
 
-export type Overrun = { dept: Dept; spent: number; budget: number }
+/** 예산에 드는 토큰: 입력·출력·캐시 쓰기(캐시 읽기는 뺀다: 긴 일은 턴마다 수십만씩 읽고, 사내 서버에서는 거의 공짜라 한도가 금방 찬다) */
+export const budgetTokensOf = (t: TokenUse | undefined): number => (t === undefined ? 0 : t.input + t.output + t.cacheWrite)
+
+/** 그 부서가 최근 24시간에 쓴 토큰 수(가격을 몰라도 센다, 캐시 읽기 빼고): 끝낸 일(일한 것 + 그 일의 결재) + 지금 일하는 사람이 쓴 것 */
+export function spentTokensOf(book: HrBook, agents: readonly OfficeAgent[], dept: Dept, now: number): number {
+  const done = book.log.filter(r => r.dept === dept && now - r.endedAt <= BUDGET_MS && r.endedAt <= now)
+    .reduce((s, r) => s + budgetTokensOf(r.tokens) + budgetTokensOf(r.reviewTokens), 0)
+  const running = agents.filter(a => a.id !== 'main' && a.dept === dept && a.endedAt === null).reduce((s, a) => s + budgetTokensOf(a.tokens), 0)
+  return done + running
+}
+
+/** 예산 단위: 달러(API 정가로 어림) 또는 토큰 수 */
+export type BudgetUnit = 'usd' | 'tokens'
+export type Overrun = { dept: Dept; spent: number; budget: number; unit: BudgetUnit }
+
+/** 그 부서가 넘은 예산(달러 한도를 먼저, 그다음 토큰 한도). 넘지 않았으면 null */
+export function overOf(book: HrBook, agents: readonly OfficeAgent[], dept: Dept, now: number): Overrun | null {
+  const usd = book.budgets[dept]
+  if (usd !== undefined) {
+    const spent = spentOf(book, agents, dept, now)
+    if (spent >= usd) return { dept, spent, budget: usd, unit: 'usd' }
+  }
+  const tokens = book.tokenBudgets?.[dept]
+  if (tokens !== undefined) {
+    const spent = spentTokensOf(book, agents, dept, now)
+    if (spent >= tokens) return { dept, spent, budget: tokens, unit: 'tokens' }
+  }
+  return null
+}
+
+/** 그 부서에 예산(달러나 토큰)이 있는지 */
+export const hasBudget = (book: HrBook, dept: Dept): boolean => book.budgets[dept] !== undefined || book.tokenBudgets?.[dept] !== undefined
+/** 예산을 둔 부서가 하나라도 있는지 */
+export const anyBudget = (book: HrBook): boolean => DEPTS.some(d => hasBudget(book, d))
 
 /** 예산을 넘었는데 최근 24시간 안에 알리지 않은 부서 */
 export function overrunsOf(book: HrBook, agents: readonly OfficeAgent[], now: number): Overrun[] {
   return DEPTS.flatMap(dept => {
-    const budget = book.budgets[dept]
-    if (budget === undefined) return []
+    if (!hasBudget(book, dept)) return []
     const at = book.budgetNotices[dept]
     if (at !== undefined && now - at <= BUDGET_MS) return []
-    const spent = spentOf(book, agents, dept, now)
-    return spent >= budget ? [{ dept, spent, budget }] : []
+    const o = overOf(book, agents, dept, now)
+    return o === null ? [] : [o]
   })
 }
 
@@ -48,21 +80,33 @@ export function overrunsOf(book: HrBook, agents: readonly OfficeAgent[], now: nu
 export const noticed = (book: HrBook, depts: readonly Dept[], now: number): HrBook =>
   depts.length === 0 ? book : { ...book, budgetNotices: { ...book.budgetNotices, ...Object.fromEntries(depts.map(d => [d, now])) } }
 
+/** 한도·쓴 양 글: $5.00 또는 2.0M 토큰 */
+export const amountText = (n: number, unit: BudgetUnit): string => (unit === 'usd' ? usdText(n) : `${tokenText(n)} 토큰`)
+
 /** 예산 초과 알림 한 줄 */
 export const overrunText = (o: Overrun): string =>
-  `${DEPT_INFO[o.dept].ko} 하루 예산 초과: 최근 24시간 ${usdText(o.spent)} / 예산 ${usdText(o.budget)}(${Math.round((o.spent / o.budget) * 100)}%)`
+  `${DEPT_INFO[o.dept].ko} 하루 ${o.unit === 'usd' ? '예산' : '토큰 예산'} 초과: 최근 24시간 ${amountText(o.spent, o.unit)} / 예산 ${amountText(o.budget, o.unit)}(${Math.round((o.spent / o.budget) * 100)}%)`
 
-/** 부서별 예산 현황(예산을 둔 부서만, 없으면 빈 목록) */
+/** 부서별 예산 현황(예산을 둔 부서만, 없으면 빈 목록): 달러 한도와 토큰 한도를 따로 한 줄씩 */
 export function budgetBlocks(book: HrBook, agents: readonly OfficeAgent[], now: number): Block[] {
-  const set = DEPTS.filter(d => book.budgets[d] !== undefined)
-  if (set.length === 0) return []
-  return [
-    { t: 'section', text: '하루 예산(최근 24시간, API 정가로 어림)' },
-    { t: 'table', head: ['부서', '쓴 비용', '예산', '비율', '상태'], align: ['l', 'r', 'r', 'r', 'l'], rows: set.map(d => {
-      const budget = book.budgets[d] as number
+  const rows = DEPTS.flatMap(d => {
+    const out: string[][] = []
+    const usd = book.budgets[d]
+    if (usd !== undefined) {
       const spent = spentOf(book, agents, d, now)
-      return [DEPT_INFO[d].ko, usdText(spent), usdText(budget), `${Math.round((spent / budget) * 100)}%`, spent >= budget ? '초과' : '']
-    }) },
+      out.push([DEPT_INFO[d].ko, '비용', usdText(spent), usdText(usd), `${Math.round((spent / usd) * 100)}%`, spent >= usd ? '초과' : ''])
+    }
+    const tokens = book.tokenBudgets?.[d]
+    if (tokens !== undefined) {
+      const spent = spentTokensOf(book, agents, d, now)
+      out.push([DEPT_INFO[d].ko, '토큰', tokenText(spent), tokenText(tokens), `${Math.round((spent / tokens) * 100)}%`, spent >= tokens ? '초과' : ''])
+    }
+    return out
+  })
+  if (rows.length === 0) return []
+  return [
+    { t: 'section', text: '하루 예산(최근 24시간, 비용은 API 정가로 어림, 토큰은 캐시 읽기 빼고)' },
+    { t: 'table', head: ['부서', '한도', '쓴 양', '예산', '비율', '상태'], align: ['l', 'l', 'r', 'r', 'r', 'l'], rows },
   ]
 }
 
@@ -70,6 +114,15 @@ export function budgetBlocks(book: HrBook, agents: readonly OfficeAgent[], now: 
 export const budgetLines = (book: HrBook, agents: readonly OfficeAgent[], now: number): string[] => {
   const blocks = budgetBlocks(book, agents, now)
   return blocks.length === 0 ? [] : textOf(blocks).split('\n')
+}
+
+/** "2M", "500k", "300000t", "1.5m토큰", "2M tokens" → 토큰 수(0보다 커야 한다). 그 밖의 꼴은 null(달러는 dollarsOf) */
+export function tokensAmountOf(text: string): number | null {
+  const m = /^(\d+(?:\.\d+)?)\s*(k|m|t|tok|tokens?|토큰|k\s*토큰|m\s*토큰|k\s*tokens?|m\s*tokens?)$/i.exec(text.trim())
+  if (m === null) return null
+  const unit = (m[2] ?? '').toLowerCase()
+  const n = Math.round(Number(m[1]) * (unit.startsWith('k') ? 1_000 : unit.startsWith('m') ? 1_000_000 : 1))
+  return n > 0 ? n : null
 }
 
 // ── 예산 조치: 한도를 넘은 부서에 새 일을 맡길 때 대표에게 묻는다(계속 / 이번만 / 중단) ─────
@@ -88,12 +141,10 @@ export const choiceOf = (label: string | undefined): BudgetChoice =>
 
 /** 새 일을 맡기기 전에 물어야 하는 초과: 예산을 넘었고, 최근 24시간 안에 "계속"으로 넘기지 않은 부서면 그 초과, 아니면 null */
 export function gateOf(book: HrBook, agents: readonly OfficeAgent[], dept: Dept, now: number): Overrun | null {
-  const budget = book.budgets[dept]
-  if (budget === undefined) return null
+  if (!hasBudget(book, dept)) return null
   const at = book.budgetWaivers?.[dept]
   if (at !== undefined && now - at <= BUDGET_MS) return null
-  const spent = spentOf(book, agents, dept, now)
-  return spent >= budget ? { dept, spent, budget } : null
+  return overOf(book, agents, dept, now)
 }
 
 /** "계속"을 골랐다: 24시간 동안 그 부서에 새 일을 맡길 때 다시 묻지 않는다 */

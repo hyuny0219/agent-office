@@ -18,9 +18,10 @@ import { checkRunOf, errLineOf, oopsOf, orderOf, reportLineOf, selfTalkOf, hrLin
 import { attend, errorToast, isCheckCommand, isOvertime, nudgeOf, repeatToast } from '../core/watch'
 import { enroll, errorLessonKey, markHit, settle } from '../core/trial'
 import { activityOf, layoutOf, nickFor, Office, shortType } from '../core/scene'
-import { addTokens, chargeReview, priceOf, usdOf } from '../core/tokens'
+import { addTokens, chargeReview, modelLabel, priceOf, usdOf } from '../core/tokens'
+import type { Price } from '../core/tokens'
 import type { TokenUse } from '../types'
-import { BUDGET_CHOICES, budgetDenyText, budgetQuestion, choiceOf, noticed, overrunsOf, overrunText, waive } from '../core/budget'
+import { anyBudget, BUDGET_CHOICES, budgetDenyText, budgetQuestion, choiceOf, noticed, overrunsOf, overrunText, waive } from '../core/budget'
 import type { BudgetChoice } from '../core/budget'
 import { textOf } from '../core/table'
 import { markSeen, playbookLines, proposalNotices, tellProposals } from '../core/playbook'
@@ -34,9 +35,24 @@ import { descriptionOf, gatesFor, tasksOf } from './tasks'
 type Ctx = any
 type Pi = any
 
-/** 결재자 모델(지금 세대 Haiku) */
-const APPROVER = 'haiku'
-const APPROVAL_TIMEOUT_MS = 8_000
+/**
+ * 결재자 모델: 환경 변수 AGENT_OFFICE_APPROVER(모델 이름·역할 별칭)로 정한 모델, 없으면 Haiku, 그것도 없으면 지금 세션 모델
+ * (사내 omp처럼 쓸 수 있는 모델이 하나뿐이면 그 모델이 결재한다)
+ */
+function approverOf(ctx: Ctx): any | undefined {
+  const want = process.env.AGENT_OFFICE_APPROVER?.trim()
+  const picked = want === undefined || want === '' ? undefined : ctx.models?.resolve?.(want)
+  return picked ?? ctx.models?.resolve?.('haiku') ?? ctx.models?.current?.()
+}
+const isHaiku = (model: any): boolean => /haiku/i.test(String(model?.id ?? ''))
+/** 결재 한 번을 기다리는 시간: 환경 변수 AGENT_OFFICE_APPROVAL_TIMEOUT_MS, 없으면 Haiku 8초·그 밖의 모델(사내 서버 등) 30초 */
+function approvalTimeoutOf(model: any): number {
+  const set = Number(process.env.AGENT_OFFICE_APPROVAL_TIMEOUT_MS)
+  return Number.isFinite(set) && set > 0 ? set : isHaiku(model) ? 8_000 : 30_000
+}
+/** 메인이 서브에이전트 결과를 받을 때 결재를 기다리는 시간(마지막으로 고른 결재자 기준) */
+let APPROVAL_TIMEOUT_MS = 8_000
+
 const EDIT_TOOLS = new Set(['edit', 'write'])
 /** omp의 도구 이름(소문자)을 core가 아는 이름(Bash·Read…)으로 */
 const toolName = (t: string): string => (t === '' ? t : t[0]!.toUpperCase() + t.slice(1))
@@ -92,25 +108,43 @@ const freshAgent = (id: string, type: string, nick: string, description: string,
 
 
 /** 모델 한 번의 사용량을 TokenUse로(가격을 아는 모델이면 달러까지) */
-function tokensOfUsage(u: any, model: string | undefined): TokenUse | null {
+/**
+ * 모델 가격(백만 토큰당 달러): Claude 가격표에 없으면 omp 모델 목록에 적힌 가격(cost)으로. 둘 다 없거나 0이면 null(가격 모름 토큰으로 적는다:
+ * 사내 서버 모델은 토큰 예산으로 잰다)
+ */
+function priceFor(ctx: Ctx | null, model: string): Price | null {
+  const known = priceOf(model)
+  if (known !== null) return known
+  const cost = ctx?.models?.resolve?.(model)?.cost
+  const n = (x: unknown) => (typeof x === 'number' && Number.isFinite(x) && x > 0 ? x : 0)
+  if (cost === undefined || cost === null || n(cost.input) + n(cost.output) === 0) return null
+  return { input: n(cost.input), output: n(cost.output), cacheRead: n(cost.cacheRead) }
+}
+
+function tokensOfUsage(u: any, model: string | undefined, ctx: Ctx | null = null): TokenUse | null {
   if (u === null || typeof u !== 'object') return null
   const n = (x: unknown) => (typeof x === 'number' && Number.isFinite(x) && x > 0 ? x : 0)
   const t: TokenUse = { input: n(u.input), output: n(u.output), cacheRead: n(u.cacheRead), cacheWrite: n(u.cacheWrite), usd: 0, unpriced: 0 }
   const total = t.input + t.output + t.cacheRead + t.cacheWrite
   if (total === 0) return null
-  const p = model === undefined ? null : priceOf(model)
+  // omp가 이미 셈한 비용이 있으면 그대로(구간·캐시 쓰기 가격까지 omp 목록대로), 없으면 가격표로
+  const given = typeof u.cost?.total === 'number' && Number.isFinite(u.cost.total) && u.cost.total > 0 ? u.cost.total : null
+  if (given !== null) return { ...t, usd: given }
+  const p = model === undefined ? null : priceFor(ctx, model)
   return p === null ? { ...t, unpriced: total } : { ...t, usd: usdOf(t, p) }
 }
 
-/** 결재자 모델(Haiku)에게 한 번 묻는다. 답 글과 쓴 토큰(부르다 실패하면 null, 결재자 모델이 없으면 'no-model': 그때는 알리지 않는다) */
+/** 결재자 모델에게 한 번 묻는다. 답 글과 쓴 토큰(부르다 실패하면 null, 결재자 모델이 없으면 'no-model': 그때는 알리지 않는다) */
 async function askApprover(ctx: Ctx, system: string, prompt: string): Promise<{ text: string; spent: TokenUse | null } | null | 'no-model'> {
-  const model = ctx.models?.resolve?.(APPROVER)
+  const model = approverOf(ctx)
   if (model === undefined) return 'no-model'
+  APPROVAL_TIMEOUT_MS = approvalTimeoutOf(model)
   const apiKey = await ctx.modelRegistry?.getApiKey?.(model)
   const signal = AbortSignal.timeout(APPROVAL_TIMEOUT_MS)
-  const reply: any = await completeSimple(model, { systemPrompt: [system], messages: [{ role: 'user', content: prompt, timestamp: now() }] } as any, { apiKey, maxTokens: 400, signal } as any)
+  // 추론을 끈다: 추론 모델(GLM 등)은 짧은 답 한도를 생각하는 데 다 써 빈 답을 낸다. 끄는 옵션이 그 서버에 안 먹혀도 답할 자리가 남게 Haiku가 아니면 한도를 넉넉히 두고, 생각 블록이 섞여 와도 답 읽기가 걷어 낸다
+  const reply: any = await completeSimple(model, { systemPrompt: [system], messages: [{ role: 'user', content: prompt, timestamp: now() }] } as any, { apiKey, maxTokens: isHaiku(model) ? 400 : 1_500, signal, disableReasoning: true } as any)
     .catch(() => null)
-  return reply === null ? null : { text: textOfContent(reply.content), spent: tokensOfUsage(reply.usage, model.id) }
+  return reply === null ? null : { text: textOfContent(reply.content), spent: tokensOfUsage(reply.usage, String(model.id ?? ''), ctx) }
 }
 
 // ── 계획 검토: omp의 계획 검토 창이 열리면(plan_review_requested) 기획팀장이 계획을 검토한다 ─────────────
@@ -505,7 +539,7 @@ const asking = new Map<Dept, Promise<BudgetChoice>>()
  * 한 번의 task에 여러 부서가 섞이면 부서마다 묻고, 하나라도 맡기지 않으면 그 호출 전체를 막는다(앞에서 고른 "계속"은 남는다)
  */
 async function gateTask(ctx: Ctx, input: Record<string, unknown>): Promise<string | null> {
-  if (Object.keys(hr().budgets).length === 0) return null
+  if (!anyBudget(hr())) return null
   const at = now()
   for (const { o, what } of gatesFor(hr(), [...agents.values()], tasksOf(input), at)) {
     const dept = o.dept
@@ -566,7 +600,7 @@ export default function agentOffice(pi: Pi) {
         ctx.ui?.notify?.(on === null ? '사이드바를 띄울 수 없는 화면입니다(대화형 터미널에서만).' : on ? `사이드바를 켭니다(터미널 폭 ${SIDE_MIN_COLUMNS}칸 이상일 때 보임). 끄려면 /office side` : '사이드바를 끕니다.', 'info')
         return
       }
-      const text = await answerWith({ book: async () => hr(), save: async fn => void saveHr(fn), agents: async () => [...agents.values()], now: async () => now(), write: async (files, dir) => writeExports(files, dir) }, a)
+      const text = await answerWith({ book: async () => hr(), save: async fn => void saveHr(fn), agents: async () => [...agents.values()], now: async () => now(), write: async (files, dir) => writeExports(files, dir), approverName: () => { const m = approverOf(ctx); return m === undefined ? null : modelLabel(String(m.id ?? '')) } }, a)
       if (text === null) {
         ctx.ui?.notify?.(`모르는 명령입니다: /office ${a}. 쓰는 법: /office [menu | side | export [json|csv] | dept [<종류> <부서>] | report today|week | hr [<별칭>] | rate <별칭> good|bad|clear | budget | playbook | approval|reorg|hr on|off]`, 'warning')
         return
@@ -716,7 +750,7 @@ export default function agentOffice(pi: Pi) {
     const m = e.message
     if (m?.role !== 'assistant') return
     const id = ctx.agent?.kind === 'sub' ? ctx.agent.id : 'main'
-    const used = tokensOfUsage(m.usage, typeof m.model === 'string' ? m.model : undefined)
+    const used = tokensOfUsage(m.usage, typeof m.model === 'string' ? m.model : undefined, ctx)
     if (used === null) return
     patch(id, x => (x.endedAt !== null && id !== 'main' ? x : { ...x, tokens: addTokens(x.tokens, used), ...(typeof m.model === 'string' ? { model: m.model } : {}) }))
     if (id !== 'main') checkBudget(ctx)

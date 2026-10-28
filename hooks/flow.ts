@@ -15,7 +15,7 @@ import { shortType } from '../core/scene'
 import { addTokens, chargeReview, usageOf } from '../core/tokens'
 import { addNote, markRejected, noteOf } from '../core/notes'
 import { markSeen, proposalNotices, tellProposals } from '../core/playbook'
-import { BUDGET_CHOICES, budgetDenyText, budgetQuestion, choiceOf, gateOf, noticed, overrunsOf, overrunText, waive } from '../core/budget'
+import { anyBudget, BUDGET_CHOICES, budgetDenyText, budgetQuestion, choiceOf, gateOf, noticed, overrunsOf, overrunText, waive } from '../core/budget'
 import type { BudgetChoice, Overrun } from '../core/budget'
 import { admit, agentsOf, fresh, hold, hrOf, keptNow, MEET_MS, meet, nickOfId, patch, release, save, saveHr, speak } from './store'
 
@@ -243,7 +243,7 @@ export function takeNotes(callerId: string, agents: readonly OfficeAgent[]): str
 /** 부서 예산: 넘었는데 아직 알리지 않은 부서를 알린다(고르고 적는 일은 한 번의 저장 안에서: 나란히 불려도 한 번만 알리도록) */
 export async function checkBudget($: EngineInterface) {
   const b = await hrOf($)
-  if (Object.keys(b.budgets).length === 0) return
+  if (!anyBudget(b)) return
   const agents = await agentsOf($)
   const now = await $.clock.now()
   if (overrunsOf(b, agents, now).length === 0) return
@@ -293,7 +293,7 @@ const asking = new Map<Dept, Promise<BudgetChoice>>()
  */
 export async function gateSpawn($: EngineInterface, type: string, description: string): Promise<string | null> {
   const b = await hrOf($)
-  if (Object.keys(b.budgets).length === 0) return null
+  if (!anyBudget(b)) return null
   const dept = deptFor(b, type)
   const now = await $.clock.now()
   const o = gateOf(b, await agentsOf($), dept, now)

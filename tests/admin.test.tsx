@@ -131,6 +131,11 @@ test('예산 조치: 한도를 넘은 부서에 맡기기 전에 묻고, 맡기�
   // 한도를 다시 정하면 다시 묻는다
   await $.command.run({ command: 'office', args: 'budget 개발팀 2', ...RUN })
   expect(d.book()?.budgetWaivers).toBeUndefined()
+  // 토큰 한도로도 정하고, off면 둘 다 없앤다
+  expect(text(await $.command.run({ command: 'office', args: 'budget 개발팀 2M', ...RUN }))).toContain('하루 토큰 예산을 2.0M 토큰으로')
+  expect([d.book()?.budgets.dev, d.book()?.tokenBudgets?.dev]).toEqual([2, 2_000_000])
+  await $.command.run({ command: 'office', args: 'budget 개발팀 off', ...RUN })
+  expect([d.book()?.budgets.dev, d.book()?.tokenBudgets]).toEqual([undefined, undefined])
 })
 
 test('예산 조치: 같은 부서에 나란히 맡기면 한 번만 묻고, 기다리던 일들은 같은 답을 따른다', async ($, on) => {

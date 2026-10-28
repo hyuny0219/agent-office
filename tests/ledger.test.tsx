@@ -113,7 +113,7 @@ test('예산: /office budget으로 정하고 끄며, 일하는 직원이 한도�
   expect(toasts.join()).toContain('개발팀 하루 예산 초과: 최근 24시간 $40.00 / 예산 $30.00(133%)')
   await step('c1')
   expect(toasts.filter(t => t.includes('예산 초과')).length).toBe(1)
-  expect(await run('report')).toMatch(/개발팀\s+\$60\.00\s+\$30\.00\s+200%\s+초과/)
+  expect(await run('report')).toMatch(/개발팀\s+비용\s+\$60\.00\s+\$30\.00\s+200%\s+초과/)
   expect(await run('budget')).toContain('하루 예산(최근 24시간')
   // 한도를 새로 정하면 다시 알릴 수 있다
   await run('budget dev 50')

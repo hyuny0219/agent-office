@@ -35,7 +35,7 @@ test('패널 줄: 모델을 짧게 적고, 폭이 모자라면 덜 중요한 칸
   expect(modelLabel('claude-opus-20261001')).toBe('Opus')
   expect(modelLabel('claude-opus-5-10')).toBe('Opus 5.10')
   expect(modelLabel('us.anthropic.claude-sonnet-4-5-20250929-v1:0')).toBe('Sonnet 4.5')
-  expect(modelLabel('magnumopus-7b')).toBe('magnumopus-7')
+  expect(modelLabel('magnumopus-7b')).toBe('Magnumopus 7b')
   expect(widthOf('😀')).toBe(2)
   expect(modelLabel('gpt-something-long')).toBe('gpt-somethin')
   expect(widthOf('BEAR 곰')).toBe(7)

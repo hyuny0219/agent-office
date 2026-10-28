@@ -122,8 +122,22 @@ export function requestOf(e: Employee, route: Extract<Route, { kind: 'review' }>
 export type Decision = { verdict: 'approved' | 'rejected'; notes: string[] }
 
 /** 결재자의 답을 읽는다. 형식을 못 지켰으면 null(보류: 점수에 반영하지 않는다) */
+/**
+ * 결재자 답에서 생각한 부분을 걷어 낸다: 추론 모델을 생각 분리 없이 띄운 사내 서버(GLM 등)는 답 앞에 <think>…</think>를 그대로 붙인다.
+ * 채팅 틀이 <think>를 프롬프트 쪽에 미리 넣는 모델은 여는 태그 없이 "생각…</think>답"으로 오니 마지막 닫는 태그 뒤만 읽는다.
+ * 답이 <think>로 시작해 닫히지 않으면(답 한도에서 잘림) 답이 없는 것이다(의견 줄에 태그 글자를 인용한 것은 그대로 둔다)
+ */
+export const withoutThinking = (text: string): string => {
+  let cut = text.replace(/<think(?:ing)?>[\s\S]*?<\/think(?:ing)?>/gi, '')
+  const close = [...cut.matchAll(/<\/think(?:ing)?>/gi)].pop()
+  const before = close === undefined ? '' : cut.slice(0, close.index)
+  // 닫는 태그 앞에 판정 줄(승인·반려·적합·보완)이 이미 있으면 생각이 아니라 의견에 인용한 태그다
+  if (close !== undefined && !/<think(?:ing)?>/i.test(before) && !/^[\s*#]*(?:결재|검토|판정)?\s*[:：]?\s*(?:승인|반려|적합|보완)/m.test(before)) cut = cut.slice((close.index ?? 0) + close[0].length)
+  return /^\s*<think(?:ing)?>/i.test(cut) ? '' : cut
+}
+
 export function decisionOf(text: string): Decision | null {
-  const lines = text.split('\n').map(l => l.trim()).filter(l => l !== '')
+  const lines = withoutThinking(text).split('\n').map(l => l.trim()).filter(l => l !== '')
   const head = headWord(lines[0] ?? '', ['승인', '반려'])
   if (head === null) return null
   return { verdict: head === '승인' ? 'approved' : 'rejected', notes: notesOf(lines.slice(1)) }
@@ -175,7 +189,7 @@ export function planRequestOf(reviewer: string, plan: string, mistakes: readonly
 export type PlanReview = { isFit: boolean; notes: string[] }
 
 export function planReviewOf(text: string): PlanReview | null {
-  const lines = text.split('\n').map(l => l.trim()).filter(l => l !== '')
+  const lines = withoutThinking(text).split('\n').map(l => l.trim()).filter(l => l !== '')
   const head = headWord(lines[0] ?? '', ['적합', '보완'])
   if (head === null) return null
   return { isFit: head === '적합', notes: notesOf(lines.slice(1)) }

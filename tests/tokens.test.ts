@@ -1,10 +1,12 @@
 // 테스트: 토큰·비용.
 import { expect, test } from 'claude-code/testing'
 
+import { decisionOf, planReviewOf, withoutThinking } from '../core/approval'
+
 import type { HrBook, JobRecord } from '../types'
 import { emptyBook, hire, migrate } from '../core/hr'
 import { cardOf } from '../core/report'
-import { addTokens, chargeReview, costText, priceOf, tokenDetail, tokensOf, tokenText, totalOf, usageOf, usdText } from '../core/tokens'
+import { addTokens, chargeReview, costText, modelLabel, priceOf, tokenDetail, tokenText, tokensOf, totalOf, usageOf, usdText } from '../core/tokens'
 
 test('토큰: 사용량 네 가지를 더하고 짧게 적으며, 저장된 값은 모양을 보고 읽고, 결재 토큰은 그 일 기록에 붙는다', () => {
   const t = usageOf({ input_tokens: 1200, output_tokens: 800, cache_read_input_tokens: 10_000, cache_creation_input_tokens: 300 }, 'claude-sonnet-5-5')
@@ -60,4 +62,25 @@ test('토큰: 사용량 네 가지를 더하고 짧게 적으며, 저장된 값�
   expect('tokens' in (back.employees[1] ?? {})).toBe(false)
   expect(back.log[0]?.tokens).toEqual(t)
   expect(back.log[0]?.reviewTokens).toBeUndefined()
+})
+
+test('사내 모델: 이름은 제공자·양자화 꼬리를 떼어 짧게, 생각 블록이 붙은 결재자 답도 읽는다', () => {
+  expect(modelLabel('GLM-5.2-NVFP4')).toBe('GLM 5.2')
+  expect(modelLabel('internal/glm-5.2-nvfp4')).toBe('GLM 5.2')
+  expect(modelLabel('qwen3-coder-30b-fp8')).toBe('Qwen 3')
+  expect(modelLabel('Llama-3.3-70B-Instruct-AWQ')).toBe('Llama 3.3')
+  expect(modelLabel('gpt-5.2')).toBe('GPT 5.2')
+  expect(modelLabel('claude-opus-5-5')).toBe('Opus 5.5')
+  expect(modelLabel('mystery')).toBe('mystery')
+  expect(decisionOf('<think>\n보고를 보니 테스트가 통과했다.\n</think>\n승인')?.verdict).toBe('approved')
+  expect(decisionOf('<think>길게 생각하다 잘림')).toBeNull()
+  expect(planReviewOf('<think>음</think>\n\n보완\n- 테스트 단계를 넣을 것')).toEqual({ isFit: false, notes: ['테스트 단계를 넣을 것'] })
+  expect(withoutThinking('그냥 답')).toBe('그냥 답')
+  // 채팅 틀이 <think>를 미리 넣어 여는 태그 없이 오는 답
+  expect(decisionOf('보고와 근거가 맞다.\n</think>\n\n승인')?.verdict).toBe('approved')
+  // 의견 줄에 태그 글자를 인용한 것은 답을 버리지 않는다
+  expect(decisionOf('승인\n- <think> 태그 처리를 확인함')?.verdict).toBe('approved')
+  expect(decisionOf('승인\n- 끝에 </think> 태그를 남김')?.verdict).toBe('approved')
+  expect(decisionOf('<think>a</think>반려\n- </think> 인용')?.verdict).toBe('rejected')
+  expect(modelLabel('gpt-4o-mini')).toBe('GPT 4o')
 })

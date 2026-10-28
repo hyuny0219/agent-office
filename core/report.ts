@@ -8,7 +8,7 @@ import { CONTROL_EVERY, effectText } from './trial'
 import { accuracyBlocks } from './org'
 import { koNick } from './scene'
 import { costText, sumTokens, tokenDetail, tokenText, totalOf, usdText, useText } from './tokens'
-import { budgetBlocks } from './budget'
+import { anyBudget, budgetBlocks } from './budget'
 import { noteLine } from './notes'
 import { textOf } from './table'
 import type { Block } from './table'
@@ -257,7 +257,7 @@ export function rosterBlocks(b: HrBook, now: number): Block[] {
     { t: 'bullet', text: `평가: 완료 +10, 실패 -5(중단 -3), 도구 오류 1개당 -1(최대 -5), 오류 없이 완료 +3, 테스트·빌드 실패한 채 완료 -${CHECK_PENALTY}, 끝낸 뒤 BOSS가 같은 파일을 다시 고치면 재작업 -${REWORK_PENALTY}, 결재 반려 -${REJECT_PENALTY}` },
     { t: 'bullet', text: `대표 평가: 끝낸 일에 좋음 +${BOSS_RATE_POINTS} · 아쉬움 -${BOSS_RATE_POINTS}(메뉴의 인사카드, /office rate <별칭> good|bad|clear). 결재 정확도(승인+아쉬움은 놓친 승인, 반려+좋음은 빗나간 반려)와 적임자 배정에도 쓴다. 떠난 직원은 평가하지 않는다` },
     { t: 'bullet', text: '직급: 사원 0 · 대리 20 · 과장 60 · 차장 120 · 부장 200(경력, 감점이면 깎여 강등). 평균 평가는 최근 일에 무게를 둡니다' },
-    { t: 'bullet', text: `예산: ${DEPTS.some(d => b.budgets[d] !== undefined) ? DEPTS.flatMap(d => (b.budgets[d] === undefined ? [] : [`${DEPT_INFO[d].ko} 하루 ${usdText(b.budgets[d] ?? 0)}`])).join(' · ') : '없음'}(넘으면 하루 한 번 알리고, 그 부서에 새 일을 맡길 때 계속·이번만·맡기지 않기를 묻는다. /office budget <부서> <달러>|off)` },
+    { t: 'bullet', text: `예산: ${anyBudget(b) ? DEPTS.flatMap(d => [...(b.budgets[d] === undefined ? [] : [`${DEPT_INFO[d].ko} 하루 ${usdText(b.budgets[d] ?? 0)}`]), ...(b.tokenBudgets?.[d] === undefined ? [] : [`${DEPT_INFO[d].ko} 하루 ${tokenText(b.tokenBudgets[d] ?? 0)} 토큰`])]).join(' · ') : '없음'}(넘으면 하루 한 번 알리고, 그 부서에 새 일을 맡길 때 계속·이번만·맡기지 않기를 묻는다. /office budget <부서> <달러>|<토큰 수>|off)` },
     { t: 'bullet', text: '부서 지침: 반복되는 흠으로 만든 개선안을 대표가 채택하면 그 부서 업무 지시에 붙고 전후 성적을 견준다(/office playbook, 메뉴 6)' },
     { t: 'bullet', text: '배정: 쉬고 있는 부서 직원 중 비슷한 일을 잘 끝낸 사람·평균 평가가 높은 사람에게 맡깁니다. 에이전트 종류의 부서는 /office dept <종류> <부서>로 바꿉니다' },
     { t: 'bullet', text: `기록: 업무 기록은 최근 ${MAX_LOG}건을 두고, 밀려난 오래된 일은 월별 요약으로 접어 둡니다(메뉴 7). /office export [json|csv]로 내보냅니다` },

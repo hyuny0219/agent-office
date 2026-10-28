@@ -49,7 +49,7 @@ In the desktop app, where `/plugin` does not run: click + next to the prompt box
 | `/office hr <nick>` | One employee's personnel card: rank and experience to the next rank, salary breakdown, record, token total, last 5 jobs, the department's repeated mistakes (`bear` or the Korean name both work, former employees too) |
 | `/office approval on` / `off` | Turn approvals on or off (on by default): team leads sign off finished jobs' reports, and the planning lead reviews confirmed plans |
 | `/office reorg on` / `off` | Turn reorganization on or off (on by default): employees with persistently poor reviews are asked to resign, and long-idle ones see their contracts end |
-| `/office budget [<dept> <dollars>\|off]` | Show, set or remove a department's daily (last 24 hours) spending limit (e.g. `/office budget dev 5`) |
+| `/office budget [<dept> <dollars>\|<tokens>\|off]` | Show, set or remove a department's daily (last 24 hours) spending limit or token limit (e.g. `/office budget dev 5`, `/office budget dev 2M`) |
 | `/office report [today\|week]` | Daily (last 24 hours, the default) or weekly (last 7 days) report: totals and per-department results, hours worked and labor cost, token usage (per department and top spenders), approval counts and each approver's accuracy, MVP, and jobs to look at (failed, finished with failing tests, reworked, attendance alerts, rejected) |
 | `/office hr on` / `off` | Turn the HR memo in task briefs and the attendance notices on or off (on by default) |
 | `/office hr ab on` / `off` | Turn training-effect measurement (a control group that gets no mistake list) on or off (on by default) |
@@ -168,7 +168,7 @@ Every time an agent calls the model, the usage the engine reports (input, output
 
 ### Department budgets
 
-Set a daily spending limit in dollars per department, e.g. `/office budget dev 5`. The department's cost over the last 24 hours (finished jobs plus their approvals, plus what employees at work right now have spent) is checked, and going over is announced with a toast and in the messenger (from HR). Each department is announced at most once per 24 hours; setting a new limit allows a new notice.
+Set a daily spending limit in dollars per department, e.g. `/office budget dev 5`, or a token-count limit, e.g. `/office budget dev 2M` (also `500k`, `300000t`). Token limits work for models without a known price (such as in-house models) and count input, output and cache-write tokens (cache reads are left out: long jobs read hundreds of thousands per turn, and they are nearly free on self-hosted servers); with both set, going over either one triggers the notice and the question. The department's cost over the last 24 hours (finished jobs plus their approvals, plus what employees at work right now have spent) is checked, and going over is announced with a toast and in the messenger (from HR). Each department is announced at most once per 24 hours; setting a new limit allows a new notice.
 
 Before a new job goes to a department over its limit, a dialog asks first:
 - **Keep assigning**: assign this job and don't ask again for that department for 24 hours.

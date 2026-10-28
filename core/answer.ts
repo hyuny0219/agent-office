@@ -7,7 +7,7 @@ import { cardOf, deptMapBlocks, findEmployee, reportOf, rosterText } from './rep
 import type { Period } from './report'
 import { IDLE_JOBS, IDLE_MS, RETIRE_AVG, RETIRE_JOBS } from './org'
 import { CONTROL_EVERY } from './trial'
-import { budgetLines, deptNamed, dollarsOf, unwaive } from './budget'
+import { amountText, budgetLines, deptNamed, dollarsOf, tokensAmountOf, unwaive } from './budget'
 import { exportFiles } from './archive'
 import type { ExportKind } from './archive'
 import { adopt, dropRule, markSeen, MAX_RULES, settled, playbookBlocks, proposalsOf, roomOf } from './playbook'
@@ -28,9 +28,12 @@ const withRo = (word: string): string => {
 
 export const COMMAND = {
   name: 'office',
-  description: '에이전트 사무실 평면도 보기. menu: 메뉴 화면(인사 명부·보고서·예산·설정·지침·월별 기록을 표로), export [json|csv] [<폴더>]: 인사 기록 내보내기, dept [<종류> <부서>|<종류> reset]: 에이전트 종류의 부서 배치, playbook [<부서> adopt <n|all>|<부서> drop <n>]: 부서 지침(평가로 만든 개선안을 채택), rate <별칭> good|bad|clear: 최근 끝낸 일에 대표 평가, budget [<부서> <달러>|<부서> off]: 부서별 하루 비용 한도, approval on|off: 보고·계획 결재 켜고 끄기, reorg on|off: 조직 개편(권고사직·계약 종료) 켜고 끄기, report [today|week]: 일간·주간 보고, hr: 인사 기록(부서·직급·연봉·평가), hr <별칭>: 인사카드, hr on|off: 업무 지시 인사 메모 켜고 끄기, hr ab on|off: 교육 효과 측정(비교군) 켜고 끄기',
-  argumentHint: '[menu | export [json|csv] [<폴더>] | dept [<종류> <부서>|<종류> reset] | playbook [<부서> adopt <n|all>|<부서> drop <n>] | rate <별칭> good|bad|clear | budget [<부서> <달러>|<부서> off] | approval on|off | reorg on|off | report [today|week] | hr [<별칭>|on|off|ab on|off]]',
+  description: '에이전트 사무실 평면도 보기. menu: 메뉴 화면(인사 명부·보고서·예산·설정·지침·월별 기록을 표로), export [json|csv] [<폴더>]: 인사 기록 내보내기, dept [<종류> <부서>|<종류> reset]: 에이전트 종류의 부서 배치, playbook [<부서> adopt <n|all>|<부서> drop <n>]: 부서 지침(평가로 만든 개선안을 채택), rate <별칭> good|bad|clear: 최근 끝낸 일에 대표 평가, budget [<부서> <달러>|<부서> <토큰 수(2M·500k)>|<부서> off]: 부서별 하루 비용·토큰 한도, approval on|off: 보고·계획 결재 켜고 끄기, reorg on|off: 조직 개편(권고사직·계약 종료) 켜고 끄기, report [today|week]: 일간·주간 보고, hr: 인사 기록(부서·직급·연봉·평가), hr <별칭>: 인사카드, hr on|off: 업무 지시 인사 메모 켜고 끄기, hr ab on|off: 교육 효과 측정(비교군) 켜고 끄기',
+  argumentHint: '[menu | export [json|csv] [<폴더>] | dept [<종류> <부서>|<종류> reset] | playbook [<부서> adopt <n|all>|<부서> drop <n>] | rate <별칭> good|bad|clear | budget [<부서> <달러>|<토큰 수>|off] | approval on|off | reorg on|off | report [today|week] | hr [<별칭>|on|off|ab on|off]]',
 }
+
+/** 결재자 모델 안내(모델이 없으면 결재를 건너뛴다고) */
+const approverText = (name: string | null): string => (name === null ? '다만 결재를 부를 모델이 없어 결재·계획 검토를 건너뜁니다.' : `결재마다 ${name}를 한 번 부릅니다.`)
 
 /** 명령이 인사 기록과 사무실을 읽고 쓰는 길 */
 export type Desk = {
@@ -40,6 +43,8 @@ export type Desk = {
   now: () => Promise<number>
   /** 내보낼 파일들을 쓴다(dir이 없으면 그 판의 기본 폴더에). 쓴 경로를 돌려준다 */
   write: (files: readonly { name: string; text: string }[], dir: string | null) => Promise<string[]>
+  /** 결재를 부를 모델의 이름(안내 글용, 없으면 Claude Code판의 결재자 모델) */
+  approverName?: () => string | null
 }
 
 /** 글로 답할 하위 명령이면 그 답, 화면을 열 명령이면 null */
@@ -49,7 +54,7 @@ export async function answerWith(desk: Desk, args: string): Promise<string | nul
     if (arg !== 'on' && arg !== 'off') return `결재: ${(await desk.book()).isApproving ? '켜짐' : '꺼짐'}. 쓰는 법: /office approval on|off`
     await desk.save(b => ({ ...b, isApproving: arg === 'on' }))
     return arg === 'on'
-      ? `끝낸 일의 보고를 팀장이 결재하고(과장 이상·짧은 일은 전결, 반려 -${REJECT_PENALTY}), 확정한 계획은 기획팀장이 검토합니다. 결재마다 ${APPROVER_MODEL}를 한 번 부릅니다.`
+      ? `끝낸 일의 보고를 팀장이 결재하고(과장 이상·짧은 일은 전결, 반려 -${REJECT_PENALTY}), 확정한 계획은 기획팀장이 검토합니다. ${approverText(desk.approverName === undefined ? APPROVER_MODEL : desk.approverName())}`
       : '결재를 멈춥니다. 보고와 계획은 결재 없이 넘어갑니다.'
   }
   if (sub === 'reorg') {
@@ -63,7 +68,7 @@ export async function answerWith(desk: Desk, args: string): Promise<string | nul
     const now = await desk.now()
     if (arg === undefined || arg === '') {
       const lines = budgetLines(await desk.book(), await desk.agents(), now)
-      return lines.length > 0 ? lines.join('\n') : '부서 예산이 없습니다. 쓰는 법: /office budget <부서> <달러> (예: /office budget 개발팀 5), 없애려면 /office budget <부서> off'
+      return lines.length > 0 ? lines.join('\n') : '부서 예산이 없습니다. 쓰는 법: /office budget <부서> <달러>|<토큰 수> (예: /office budget 개발팀 5, 가격을 모르는 모델이면 /office budget 개발팀 2M), 없애려면 /office budget <부서> off'
     }
     const dept = deptNamed(arg)
     if (dept === null) return `${arg}라는 부서가 없습니다. 부서: ${DEPTS.map(d => DEPT_INFO[d].ko).join(', ')}`
@@ -71,18 +76,31 @@ export async function answerWith(desk: Desk, args: string): Promise<string | nul
       await desk.save(b => {
         const { [dept]: _gone, ...budgets } = b.budgets
         const { [dept]: _told, ...budgetNotices } = b.budgetNotices
-        return { ...unwaive(b, dept), budgets, budgetNotices }
+        const { [dept]: _tok, ...tokenBudgets } = b.tokenBudgets ?? {}
+        const { tokenBudgets: _old, ...rest } = unwaive(b, dept)
+        return { ...rest, budgets, budgetNotices, ...(Object.keys(tokenBudgets).length === 0 ? {} : { tokenBudgets }) }
       })
       return `${DEPT_INFO[dept].ko} 예산을 없앱니다.`
     }
+    // 토큰 수(2M·500k·300000t)면 토큰 한도, 아니면 달러 한도. 한 부서에 둘 다 둘 수 있다
+    const tokens = tokensAmountOf(args.trim().split(/\s+/).slice(2).join(' '))
+    if (tokens !== null) {
+      await desk.save(b => {
+        const { [dept]: _was, ...budgetNotices } = b.budgetNotices
+        return { ...unwaive(b, dept), tokenBudgets: { ...b.tokenBudgets, [dept]: tokens }, budgetNotices }
+      })
+      return `${DEPT_INFO[dept].ko} 하루 토큰 예산을 ${amountText(tokens, 'tokens')}으로 정합니다. 최근 24시간에 쓴 토큰(입력·출력·캐시 쓰기, 캐시 읽기는 뺌)이 넘으면 하루 한 번 알리고, 그 부서에 새 일을 맡길 때 계속·이번만·맡기지 않기를 묻습니다.`
+    }
     const dollars = dollarsOf(arg2 ?? '')
-    if (dollars === null) return '쓰는 법: /office budget <부서> <달러>|off (예: /office budget 개발팀 5)'
+    if (dollars === null) return '쓰는 법: /office budget <부서> <달러>|<토큰 수>|off (예: /office budget 개발팀 5, /office budget 개발팀 2M)'
     // 새 한도로는 다시 알리고 다시 물을 수 있게 지난 알림과 "계속"을 지운다
     await desk.save(b => {
       const { [dept]: _was, ...budgetNotices } = b.budgetNotices
       return { ...unwaive(b, dept), budgets: { ...b.budgets, [dept]: dollars }, budgetNotices }
     })
-    return `${DEPT_INFO[dept].ko} 하루 예산을 ${usdText(dollars)}로 정합니다. 최근 24시간 비용(모델 API 정가로 어림)이 넘으면 하루 한 번 알리고, 그 부서에 새 일을 맡길 때 계속·이번만·맡기지 않기를 묻습니다.`
+    // 큰 수를 접미사 없이 쓰면 토큰 수를 뜻했을 수 있다
+    const hint = dollars >= 1000 ? ` (토큰 수였다면 /office budget ${DEPT_INFO[dept].ko} ${Math.round(dollars)}t처럼 끝에 t·k·M을 붙이세요)` : ''
+    return `${DEPT_INFO[dept].ko} 하루 예산을 ${usdText(dollars)}로 정합니다${hint}. 최근 24시간 비용(모델 API 정가로 어림)이 넘으면 하루 한 번 알리고, 그 부서에 새 일을 맡길 때 계속·이번만·맡기지 않기를 묻습니다.`
   }
   if (sub === 'rate') {
     const use = '쓰는 법: /office rate <별칭> good|bad|clear (그 직원이 가장 최근에 끝낸 일에 대표 평가: 좋음 +' + BOSS_RATE_POINTS + ' · 아쉬움 -' + BOSS_RATE_POINTS + ')'
