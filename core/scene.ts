@@ -11,6 +11,8 @@ import { isSpeaking } from './speech'
 export const PLAN_ROWS = 27
 const MIN_W = 72
 const MAX_W = 140
+/** 사무실 패널을 열 때 바라는 폭(옆에 붙는 패널): 평면도가 넉넉히 보이는 폭 */
+export const PLAN_COLUMNS = 96
 
 const HALF = 0x2580
 const C = {

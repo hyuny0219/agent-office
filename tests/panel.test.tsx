@@ -13,6 +13,21 @@ test('데스크톱에서는 목록만 그린다', async ($, on) => {
   expect((await ui.find({ key: 'row-main' }))?.text).toContain('보스 대표')
 })
 
+test('평면도는 터미널 폭이 아니라 패널 안쪽 폭으로 그린다(옆에 붙은 패널이 평면도를 자르지 않도록)', async ($, on) => {
+  on('store.get', () => ({ value: undefined }))
+  on('store.set', () => ({ value: undefined }))
+  on('clock.now', () => ({ value: 0 }))
+  const asked: unknown[] = []
+  on('ui.open', (_$, e) => {
+    asked.push((e as { columns?: unknown }).columns)
+    return { value: { isPlaced: true } }
+  })
+  await $.command.run({ command: 'office', args: '', ...RUN })
+  expect(asked).toEqual([96])
+  const ui = await $.ui.mount({ plugin: 'agent-office', surface: 'terminal', component: 'Pane', requestId: 'agent-office', props: { ...PROPS, bodyColumns: 80 }, viewport: { columns: 200, rows: 60 } })
+  expect((await ui.find({ type: 'Raster' }) as { props?: { columns?: unknown } } | undefined)?.props?.columns).toBe(80)
+})
+
 test('설정 attachTo로 다른 패널 아래에도 평면도를 붙인다(그 패널 화면은 위에 그대로)', { options: { attachTo: 'host-pane' } }, async ($, on) => {
   on('store.get', () => ({ value: undefined }))
   on('store.set', () => ({ value: undefined }))

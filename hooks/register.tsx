@@ -7,7 +7,7 @@ import type { Bubble, Dept, OfficeAgent, TrialTicket, Utterance } from '../types
 import { briefOf, learn, lessonKey, lessonsFor } from '../core/hr'
 import { checkRunOf, errLineOf, messageOf, oopsOf, orderOf, replyOf, selfTalkOf } from '../core/speech'
 import { enroll, errorLessonKey, markHit } from '../core/trial'
-import { activityOf, layoutOf } from '../core/scene'
+import { activityOf, layoutOf, PLAN_COLUMNS } from '../core/scene'
 import { answer, COMMAND } from './commands'
 import { awaitApproval, checkBudget, checkFollowUp, checkProposals, dropPending, enterAgent, gateSpawn, holdPending, seePlaybook, checkRework, EDIT_TOOLS, fileOf, isCheckCommand, papers, reorganize, reviewPlan, syncStatus, takeNotes, watch } from './flow'
 import { usageOf } from '../core/tokens'
@@ -62,7 +62,8 @@ export const register: Register = (on, options) => {
     if (text !== null) $.ui.invalidate('ui.render')
     if (text !== null) return { text }
     await ensure($, 'main')
-    const opened = await $.ui.open({ id: PANE, title: '에이전트 사무실' })
+    // 옆에 붙을(dock) 때 평면도가 잘리지 않을 만큼 넓게 열어 달라고 한다(사람이 맞춰 둔 폭이 있으면 그 폭)
+    const opened = await $.ui.open({ id: PANE, title: '에이전트 사무실', columns: PLAN_COLUMNS })
     const lab = isAttached ? ` 설정한 패널(${attachTo}) 아래에도 붙어 있습니다.` : ''
     return { text: `${opened.isPlaced ? '에이전트 사무실을 열었습니다.' : '에이전트 사무실이 아직 그려지지 않았습니다(창이 좁으면 넓혀 주세요).'}${lab} 인사 기록은 /office hr, 보고서는 /office report.` }
   })
@@ -272,7 +273,9 @@ export const register: Register = (on, options) => {
     const agents = await agentsOf($)
     const b = await hrOf($)
     const now = await $.clock.now()
-    const lines = rowsOf(agents, b, now, e.surface === 'terminal' ? (e.viewport?.columns ?? 80) - 2 : Infinity)
+    // 폭은 패널 안쪽(bodyColumns)으로 잰다: 옆에 붙은(dock) 패널은 터미널 폭(viewport)보다 좁다
+    const width = e.props.bodyColumns
+    const lines = rowsOf(agents, b, now, e.surface === 'terminal' ? width : Infinity)
     const feedLines = feedRowsOf(feed, now)
 
     const { Box, Text, Button } = $.ui.resolve(e)
@@ -283,7 +286,7 @@ export const register: Register = (on, options) => {
       await $.ui.open({ id: MENU_PANE, title: MENU_TITLE, focus: true, closeOnEscape: true })
     }
     // 새 지침 후보가 있으면 메뉴 버튼 아래에 알림 줄(누르면 메뉴 6 지침으로)
-    const alert = proposalAlert(b, now, e.surface === 'terminal' && (e.viewport?.columns ?? 80) < 72)
+    const alert = proposalAlert(b, now, e.surface === 'terminal' && width < 72)
     const menu = (
       <Box flexDirection="column">
         <Button key="open-menu" hotkey="m" plain onPress={() => openMenu().catch(() => undefined)}>메뉴(인사 명부·보고서·예산·설정)</Button>
@@ -315,7 +318,7 @@ export const register: Register = (on, options) => {
     }
 
     const { Raster } = $.ui.resolve(e)
-    const office = officeAt(PANE, layoutOf(e.viewport?.columns ?? 80))
+    const office = officeAt(PANE, layoutOf(width))
     const cells = cellsOf(office, agents, now, b)
     return (
       <Box flexDirection="column">
@@ -414,7 +417,7 @@ export const register: Register = (on, options) => {
     isAttached = true
     const { Box, Raster } = $.ui.resolve(e)
     // 상태를 read하지 않는다: 도구 호출마다 랩 화면까지 다시 그리지 않도록 사본만 본다
-    const office = officeAt(attachTo, layoutOf(e.viewport?.columns ?? 80))
+    const office = officeAt(attachTo, layoutOf(e.props.bodyColumns))
     const cells = cellsOf(office, await agentsOf($), await $.clock.now(), await hrOf($))
     return (
       <Box flexDirection="column">
