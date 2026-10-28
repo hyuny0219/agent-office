@@ -1,11 +1,11 @@
 // 테스트: 표·패널 줄·문서 블록.
 import { expect, test } from 'claude-code/testing'
 
-import { emptyBook } from '../core/hr'
+import { emptyBook, hire } from '../core/hr'
 import { fitParts, rowsOf, widthOf } from '../hooks/view'
 import { mdOf, tableLines, textOf } from '../core/table'
 import { modelLabel } from '../core/tokens'
-import { agent } from './kit'
+import { agent, boss } from './kit'
 
 test('표: 한글은 두 칸으로 세어 칸을 맞추고, 수는 오른쪽에, 줄 끝 빈칸은 남기지 않는다', () => {
   expect(tableLines(['부서', '건수', '비고'], [['개발팀', '3', '재작업 1'], ['QA', '12', '']], ['l', 'r', 'l'])).toEqual([
@@ -66,4 +66,18 @@ test('문서 블록: 같은 내용을 글(칸 맞춘 표)과 마크다운(표·�
   expect(mdOf([{ t: 'table', head: ['업무', '수'], rows: [['아주 긴 업무 설명입니다\n둘째', ''], ['짧음']], align: ['l', 'r'], max: [10] }]))
     .toBe('| 업무 | 수 |\n| --- | ---: |\n| 아주 긴… |  |\n| 짧음 |  |')
   expect(mdOf([{ t: 'line', text: '- 줄' }, { t: 'bullet', text: '항목' }])).toBe('\\- 줄\n\n- 항목')
+})
+
+test('상황판: 같은 직원이 일을 여러 번 했어도 한 줄(일하는 중이면 그 일, 아니면 가장 최근 일)', () => {
+  const owl = (id: string, startedAt: number, endedAt: number | null, description: string) => agent(id, { nick: 'OWL', dept: 'research', startedAt, endedAt, description, activity: endedAt === null ? 'read' : 'done' })
+  const b = hire(emptyBook(), 'OWL', 'research', 'Explore', 0).book
+  const done = rowsOf([boss, owl('o1', 1000, 2000, '첫 일'), owl('o2', 3000, 4000, '둘째 일')], b, 10_000)
+  expect(done.map(r => r.key)).toEqual(['row-main', 'row-o2'])
+  expect(done[1]?.isOff).toBe(true)
+  const live = rowsOf([boss, owl('o1', 1000, 2000, '첫 일'), owl('o3', 5000, null, '지금 일'), owl('o2', 3000, 4000, '둘째 일')], b, 10_000)
+  expect(live.map(r => r.key)).toEqual(['row-main', 'row-o3'])
+  expect(live[1]?.text).toContain('지금 일')
+  // 같은 사람이 두 일을 하고 있으면(예전 기록 등) 둘 다 보인다(평면도와 같게)
+  const two = rowsOf([boss, owl('o3', 5000, null, '지금 일'), owl('o4', 6000, null, '또 다른 일'), owl('o2', 3000, 4000, '둘째 일')], b, 10_000)
+  expect(two.map(r => r.key)).toEqual(['row-main', 'row-o4', 'row-o3'])
 })

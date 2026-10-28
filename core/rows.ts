@@ -58,7 +58,19 @@ export function fitParts(parts: readonly Part[], desc: string, columns: number):
 
 /** 패널 목록: 앉은 순서대로 10명, 한 사람에 한 줄(누구·어디서 무엇을·모델·말풍선·도구·근태·걸린 시간·맡은 일), 폭에 맞춰 줄인다 */
 export function rowsOf(agents: readonly OfficeAgent[], b: HrBook, now: number, columns = Infinity): Row[] {
-  return seated(agents).slice(0, 10).map(a => {
+  // 한 사람은 한 줄: 사무실 기록은 맡은 일(에이전트 한 번)마다 남으니, 끝난 일은 그 사람이 일하는 중이거나 더 최근 일이 있으면 숨긴다
+  // (일하는 중인 일은 다 보인다: 같은 사람이 두 일을 하고 있으면 평면도처럼 둘 다)
+  const seen = new Set<string>()
+  const people = seated(agents).filter(a => {
+    if (a.endedAt === null) {
+      seen.add(a.nick)
+      return true
+    }
+    if (seen.has(a.nick)) return false
+    seen.add(a.nick)
+    return true
+  })
+  return people.slice(0, 10).map(a => {
     const emp = b.employees.find(x => x.nick === a.nick)
     const isLead = a.dept !== undefined && leadOf(b, a.dept)?.nick === a.nick
     const title = a.id === 'main' ? '대표'

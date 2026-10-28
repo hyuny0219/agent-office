@@ -9,8 +9,8 @@ import { completeSimple } from '@oh-my-pi/pi-ai'
 
 import type { Dept, Employee, OfficeAgent } from '../types'
 import { answerWith } from '../core/answer'
-import { decide, deptFor, DEPTS, handOff, hire, leadOf, learn, lessonKey, lessonsFor, record, review, rework, salaryOf, assign, briefOf, warn } from '../core/hr'
-import { decisionOf, decisionToast, REJECT_PENALTY, rejectNoteOf, requestOf, routeOf } from '../core/approval'
+import { decide, DEPT_INFO, deptFor, DEPTS, handOff, hire, leadOf, learn, lessonKey, lessonsFor, record, review, rework, salaryOf, assign, briefOf, warn } from '../core/hr'
+import { decisionOf, decisionToast, planNoteOf, planRequestOf, planReviewerOf, planReviewOf, REJECT_PENALTY, rejectNoteOf, requestOf, routeOf } from '../core/approval'
 import type { Facts } from '../core/approval'
 import { followUp, isRejectTrusted, pickFor, reorgOf } from '../core/org'
 import { addNote, briefNotes, markRejected, noteOf } from '../core/notes'
@@ -102,6 +102,50 @@ function tokensOfUsage(u: any, model: string | undefined): TokenUse | null {
   return p === null ? { ...t, unpriced: total } : { ...t, usd: usdOf(t, p) }
 }
 
+/** 결재자 모델(Haiku)에게 한 번 묻는다. 답 글과 쓴 토큰(부르다 실패하면 null, 결재자 모델이 없으면 'no-model': 그때는 알리지 않는다) */
+async function askApprover(ctx: Ctx, system: string, prompt: string): Promise<{ text: string; spent: TokenUse | null } | null | 'no-model'> {
+  const model = ctx.models?.resolve?.(APPROVER)
+  if (model === undefined) return 'no-model'
+  const apiKey = await ctx.modelRegistry?.getApiKey?.(model)
+  const signal = AbortSignal.timeout(APPROVAL_TIMEOUT_MS)
+  const reply: any = await completeSimple(model, { systemPrompt: [system], messages: [{ role: 'user', content: prompt, timestamp: now() }] } as any, { apiKey, maxTokens: 400, signal } as any)
+    .catch(() => null)
+  return reply === null ? null : { text: textOfContent(reply.content), spent: tokensOfUsage(reply.usage, model.id) }
+}
+
+// ── 계획 검토: omp의 계획 검토 창이 열리면(plan_review_requested) 기획팀장이 계획을 검토한다 ─────────────
+
+/** 검토가 보완을 권했는데 대표가 그대로 실행하기로 한 계획의 검토 의견: 메인의 다음 도구 결과 뒤에 붙인다(그 실행 동안만: 메인이 턴을 끝내거나 새 검토가 열리거나 오래되면 버린다) */
+let planNotes: { text: string; at: number }[] = []
+const PLAN_NOTE_TTL_MS = 10 * 60_000
+/** 열린 계획 검토(검토 창 id →): 기획팀장 의견(보완이면 글, 적합이면 null) */
+const planReviews = new Map<string, Promise<string | null>>()
+const takePlanNotes = (): string[] => {
+  const n = planNotes.filter(x => now() - x.at <= PLAN_NOTE_TTL_MS).map(x => x.text)
+  planNotes = []
+  return n
+}
+
+/** 계획 검토 한 번: 결과를 알리고, 보완이면 모델이 읽을 의견 글을 돌려준다 */
+async function reviewPlan(ctx: Ctx, plan: string): Promise<string | null> {
+  const b = hr()
+  if (!b.isApproving || plan.trim() === '') return null
+  const reviewer = planReviewerOf(b)
+  const mistakes = DEPTS.flatMap(d => lessonsFor(b, d, now()).map(l => `${DEPT_INFO[d].ko}: ${l.tool} "${l.pattern}"`)).slice(0, 6)
+  const ask = planRequestOf(reviewer, plan, mistakes)
+  const reply = await askApprover(ctx, ask.system, ask.prompt)
+  if (reply === 'no-model') return null
+  const r = reply === null || reply.text === '' ? null : planReviewOf(reply.text)
+  if (r === null) {
+    ctx.ui?.notify?.(`${reviewer} 계획 검토: 보류(검토자가 답하지 못함)`, 'info')
+    return null
+  }
+  ctx.ui?.notify?.(`${reviewer} 계획 검토: ${r.isFit ? '적합' : `보완${r.notes[0] === undefined ? '' : ` · ${r.notes[0]}`}`}`, r.isFit ? 'info' : 'warning')
+  say(approvalLineOf(reviewer, `계획 검토 ${r.isFit ? '적합' : `보완${r.notes[0] === undefined ? '' : ` — ${r.notes[0]}`}`}`, now()))
+  changed()
+  return r.isFit ? null : planNoteOf(reviewer, r)
+}
+
 /** 결재: 결재자 모델을 한 번 부르고, 반려면 의견을 남긴다 */
 async function approve(ctx: Ctx, a: OfficeAgent, job: number, xpBefore: number, f: Facts): Promise<void> {
   const b = hr()
@@ -115,15 +159,12 @@ async function approve(ctx: Ctx, a: OfficeAgent, job: number, xpBefore: number, 
     return
   }
   if (f.report.trim() === '') return
-  const model = ctx.models?.resolve?.(APPROVER)
-  if (model === undefined) return
-  const apiKey = await ctx.modelRegistry?.getApiKey?.(model)
   const ask = requestOf(e, route, f)
-  const signal = AbortSignal.timeout(APPROVAL_TIMEOUT_MS)
-  const reply: any = await completeSimple(model, { systemPrompt: [ask.system], messages: [{ role: 'user', content: ask.prompt, timestamp: now() }] } as any, { apiKey, maxTokens: 400, signal } as any)
-    .catch(() => null)
-  const text = reply === null ? '' : textOfContent(reply.content)
-  const spent = reply === null ? null : tokensOfUsage(reply.usage, model.id)
+  const reply = await askApprover(ctx, ask.system, ask.prompt)
+  // 결재자 모델이 없는 설정이면 예전처럼 알리지 않고 넘긴다
+  if (reply === 'no-model') return
+  const text = reply?.text ?? ''
+  const spent = reply?.spent ?? null
   const d = text === '' ? null : decisionOf(text)
   if (d === null) {
     if (spent !== null) saveHr(x => chargeReview(x, a.nick, job, spent))
@@ -621,12 +662,12 @@ export default function agentOffice(pi: Pi) {
         if (timer !== undefined) clearTimeout(timer)
       }
       for (const k of ids) delivered.add(k)
-      const extra = takeNotes(ids)
+      const extra = [...takeNotes(ids), ...takePlanNotes()]
       if (extra.length > 0) return { content: [...(e.content ?? []), ...extra.map(t => ({ type: 'text', text: `\n\n${t}` }))] }
       return
     }
     // 메인이 결과를 이미 받은 에이전트의 결재가 그 뒤에 끝났으면, 메인의 다음 도구 결과 뒤에 의견을 붙인다(기록은 아래에서 그대로 한다)
-    const late = id === 'main' ? takeNotes([...notes.keys()].filter(k => delivered.has(k))) : []
+    const late = id === 'main' ? [...takeNotes([...notes.keys()].filter(k => delivered.has(k))), ...takePlanNotes()] : []
     const withLate = late.length === 0 ? undefined : { content: [...(e.content ?? []), ...late.map(t => ({ type: 'text', text: `\n\n${t}` }))] }
     if (a === undefined || (id !== 'main' && a.endedAt !== null)) return withLate
     const name = toolName(tool)
@@ -681,8 +722,29 @@ export default function agentOffice(pi: Pi) {
     if (id !== 'main') checkBudget(ctx)
   })
 
+  // 계획 검토 창이 열렸다: 기다리지 않고 기획팀장 검토를 돌린다(이 사건의 처리기가 끝나야 검토 창이 답을 받는다)
+  pi.on('plan_review_requested', async (e: any, ctx: Ctx) => {
+    if (ctx.agent?.kind === 'sub' || typeof e.reviewId !== 'string') return
+    // omp는 검토 창을 한 번에 하나만 연다: 지난 검토와 그 의견은 새 계획과 상관없다
+    planReviews.clear()
+    planNotes = []
+    planReviews.set(e.reviewId, reviewPlan(ctx, String(e.planContent ?? '')).catch(() => null))
+  })
+
+  // 계획 검토 창이 닫혔다: 보완 의견이 있었는데 대표가 그대로 실행하기로 했으면 메인의 다음 도구 결과 뒤에 붙인다(다시 쓰기·저장·닫기면 버린다)
+  pi.on('plan_review_resolved', async (e: any) => {
+    const pending = planReviews.get(String(e.reviewId))
+    planReviews.delete(String(e.reviewId))
+    if (pending === undefined || !['execute', 'compact', 'keep'].includes(String(e.choice))) return
+    void pending.then(note => {
+      if (note !== null) planNotes = [{ text: note, at: now() }]
+    })
+  })
+
   // 서브에이전트가 일을 끝냈다(이어서 돌 일이 없을 때): 마지막 답을 보고로 평가·결재
   pi.on('agent_end', async (e: any, ctx: Ctx) => {
+    // 메인이 턴을 끝냈으면 아직 못 붙인 계획 검토 의견은 버린다(다음에 맡길 다른 일에 붙지 않도록)
+    if (ctx.agent?.kind !== 'sub' && e.willContinue !== true) planNotes = []
     if (ctx.agent?.kind !== 'sub' || e.willContinue === true) return
     const a = agents.get(ctx.agent.id)
     if (a === undefined) return
