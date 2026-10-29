@@ -4,3 +4,4 @@
 .mcpb-cache/
 dist/
 agent-office-export/
+.omc/
