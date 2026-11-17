@@ -417,6 +417,18 @@ export async function checkRework($: EngineInterface, file: string) {
   $.ui.toast(`BOSS가 ${hit.nick}의 작업(${baseName(file)})을 다시 고쳤습니다 · 재작업 -${REWORK_PENALTY}${movedText(hit)}`)
 }
 
+/**
+ * 엔진 목록에 없는 에이전트(목록에 나타나지 않는 엔진 안쪽 에이전트 등)는 끝남이 오지 않는다:
+ * 사건(턴·도구)이 이만큼 없고 도는 도구도 없으면 평가 없이 퇴근시킨다(계속 생각 중으로 남지 않도록)
+ */
+export const UNLISTED_IDLE_MS = 2 * 60_000
+/** 에이전트가 마지막으로 움직인 시각과 지금 도는 도구 수(훅 사건마다 적는다) */
+const stirs = new Map<string, { at: number; tools: number }>()
+export function stir(id: string, at: number, tools: -1 | 0 | 1 = 0) {
+  const s = stirs.get(id)
+  stirs.set(id, { at, tools: Math.max(0, (s?.tools ?? 0) + tools) })
+}
+
 let syncing: Promise<void> | null = null
 /** 동기화는 한 번에 하나만 돈다: 겹치면 같은 에이전트를 두 번 평가한다 */
 export function syncStatus($: EngineInterface): Promise<void> {
@@ -439,7 +451,13 @@ async function syncOnce($: EngineInterface) {
   const updates = new Map<string, Pick<OfficeAgent, 'activity' | 'name' | 'parentId' | 'endedAt'>>()
   for (const a of known) {
     const info = infos.find(i => i.id === a.id)
-    if (info === undefined) continue
+    if (info === undefined) {
+      const s = stirs.get(a.id)
+      const isStill = a.id !== 'main' && a.activity !== 'done' && a.activity !== 'failed' && (s?.tools ?? 0) === 0
+        && now - (s?.at ?? a.startedAt) >= UNLISTED_IDLE_MS
+      if (isStill) updates.set(a.id, { activity: 'done', name: a.name ?? null, parentId: a.parentId ?? 'main', endedAt: a.endedAt ?? now })
+      continue
+    }
     const ended = info.status === 'completed' || info.status === 'failed' || info.status === 'killed'
     const activity: OfficeActivity = info.status === 'completed' ? 'done' : ended ? 'failed'
       : info.status === 'idle' || info.status === 'waiting' ? 'idle'

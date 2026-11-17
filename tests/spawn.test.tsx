@@ -3,6 +3,7 @@ import { expect, test } from 'claude-code/testing'
 
 import { emptyBook, hire, learn, migrate } from '../core/hr'
 import { OVERTIME_MS } from '../core/watch'
+import { UNLISTED_IDLE_MS } from '../hooks/flow'
 import { agent, PROPS, RUN, SPAWN } from './kit'
 
 test('서브에이전트가 뜨면 부서 직원에게 맡기고, 업무 지시에 인사 메모를 붙이며, 끝나면 평가한다', async ($, on) => {
@@ -345,4 +346,40 @@ test('배정: 띄운 에이전트의 첫 사건이 띄우기 훅보다 먼저 �
   list.push({ id: 'q1', description: '검토', type: 'oh-my-claudecode:code-reviewer', status: 'running' })
   await $.tool.call({ tool: 'Read', file_path: '/r/a.ts', agentId: 'q1' } as never)
   expect(migrate(store.get('hr'))?.employees.map(e => e.dept).sort()).toEqual(['qa', 'research'])
+})
+
+test('엔진 목록에 없는 에이전트는 움직임이 멈추면 평가 없이 퇴근한다(계속 생각 중으로 남지 않는다)', async ($, on) => {
+  const store = new Map<string, unknown>()
+  on('store.get', (_$, e) => ({ value: store.get(e.key) }))
+  on('store.set', (_$, e) => {
+    store.set(e.key, e.value)
+    return { value: undefined }
+  })
+  let clock = 1000
+  on('clock.now', () => ({ value: clock }))
+  on('agent.list', () => ({ value: [{ id: 'c1', description: '고치기', type: 'builder', status: 'running' }] }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  const toasts: string[] = []
+  on('ui.toast', (_$, e) => {
+    toasts.push(JSON.stringify(e))
+    return { value: undefined }
+  })
+  on('turn.start', () => ({ turnId: 'g' }))
+  on('turn.complete', () => ({ text: '' }))
+  await $.command.run({ command: 'office', args: '', ...RUN })
+  const ui = await $.ui.mount({ plugin: 'agent-office', surface: 'terminal', component: 'Pane', requestId: 'agent-office', props: PROPS, viewport: { columns: 96, rows: 50 } })
+  const sync = () => $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 's', agentId: 'c1', reason: 'answer' })
+
+  await $.turn.start({ turnId: 'g', agentId: 'g1', prompt: '' })
+  expect((await ui.find({ key: 'row-g1' }))?.text).toContain('생각')
+  // 아직 멈춘 지 오래되지 않았다
+  clock += UNLISTED_IDLE_MS - 1
+  await sync()
+  expect((await ui.find({ key: 'row-g1' }))?.text).toContain('생각')
+  clock += 1
+  await sync()
+  expect((await ui.find({ key: 'row-g1' }))?.text).toContain('퇴근')
+  expect(toasts.join()).not.toContain('평가')
+  // 목록에 있는 에이전트는 그대로 일한다
+  expect((await ui.find({ key: 'row-c1' }))?.text ?? '').not.toContain('퇴근')
 })

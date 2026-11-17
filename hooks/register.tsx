@@ -9,7 +9,7 @@ import { checkRunOf, errLineOf, messageOf, oopsOf, orderOf, replyOf, selfTalkOf 
 import { enroll, errorLessonKey, markHit } from '../core/trial'
 import { activityOf, layoutOf, PLAN_COLUMNS } from '../core/scene'
 import { answer, COMMAND } from './commands'
-import { awaitApproval, checkBudget, checkFollowUp, checkProposals, dropPending, enterAgent, gateSpawn, holdPending, seePlaybook, checkRework, EDIT_TOOLS, fileOf, isCheckCommand, papers, reorganize, reviewPlan, syncStatus, takeNotes, watch } from './flow'
+import { awaitApproval, checkBudget, checkFollowUp, checkProposals, dropPending, enterAgent, gateSpawn, holdPending, seePlaybook, checkRework, EDIT_TOOLS, fileOf, isCheckCommand, papers, reorganize, reviewPlan, stir, syncStatus, takeNotes, watch } from './flow'
 import { usageOf } from '../core/tokens'
 import { playbookLines, proposalAlert } from '../core/playbook'
 import { journalViewFor } from '../core/journal'
@@ -150,6 +150,7 @@ export const register: Register = (on, options) => {
 
   on('turn.start', async ($, e, next) => {
     const id = e.agentId ?? 'main'
+    stir(id, await $.clock.now())
     await enterAgent($, id)
     await save($, patch(id, a => ({ ...a, activity: 'think', endedAt: id === 'main' ? null : a.endedAt })))
     return next(e)
@@ -158,6 +159,7 @@ export const register: Register = (on, options) => {
   // 모델을 부를 때마다 그 에이전트가 쓴 토큰을 더한다(기록이 실패해도 응답은 그대로 넘긴다)
   on('turn.step', async function* ($, e, next) {
     const step = yield* next(e)
+    stir(e.agentId ?? 'main', await $.clock.now())
     if (step.usage != null) await chargeAgent($, e.agentId ?? 'main', usageOf(step.usage, step.usage.model), step.usage.model).catch(() => undefined)
     // 직원이 쓴 만큼 부서 예산을 본다(BOSS는 부서가 없다)
     if (step.usage != null && e.agentId !== undefined) await checkBudget($).catch(() => undefined)
@@ -180,6 +182,7 @@ export const register: Register = (on, options) => {
   on('tool.call', async ($, e, next) => {
     const id = e.agentId ?? 'main'
     inflight.set(id, [...(inflight.get(id) ?? []), e.tool])
+    stir(id, await $.clock.now(), 1)
     await enterAgent($, id)
     const said = await $.clock.now()
     const me = await nickOfId($, id)
@@ -205,6 +208,7 @@ export const register: Register = (on, options) => {
       ran = await next(e)
     } finally {
       if (ran !== undefined && ran.deny === undefined && talk?.line != null) await speak($, null, null, talk.line)
+      stir(id, await $.clock.now(), -1)
       const left = [...(inflight.get(id) ?? [])]
       left.splice(left.indexOf(e.tool), 1)
       inflight.set(id, left)
