@@ -375,7 +375,9 @@ function planOf(get: () => Office | null, set: (o: Office) => void): PlanLines {
 }
 
 // ── 사이드바(켜야 보임): 오른쪽에 겹쳐 띄우는 사무실. 일반 터미널에서 겹친 화면이 떠 있으면 omp는 전역 단축키(Ctrl+O 등)를 쉬게 하므로
-// 기본은 입력창 위 2단 패널이다. 사이드바는 키를 받지 않아(handleInput 없음), omp가 정한 곳(입력창·승인 창)으로 키가 그대로 간다 ─────────────
+// 기본은 입력창 위 2단 패널이다. 사이드바는 키를 받지 않는다(handleInput 없음). 겹친 화면은 띄울 때 포커스를 가져가고, omp 18.1.x는 그 키를
+// 입력창으로 넘겨주지 않을 뿐 아니라 겹친 화면이 떠 있는 동안 포커스를 그 화면에 묶어 둔다. 그래서 사이드바는 어느 곳이 포커스를 가져도 된다고
+// 답하고(ownsOverlayFocusTarget), 띄운 뒤 포커스를 입력창에 돌려준다: 키는 늘 omp가 정한 곳(입력창·승인 창)으로 간다 ─────────────
 
 /** 사이드바를 보이는 최소 터미널 폭 */
 const SIDE_MIN_COLUMNS = 120
@@ -390,6 +392,7 @@ let sideOffice: Office | null = null
 function sideComponent(beforeRender: () => void) {
   const off = onChange(() => lastTui?.requestRender?.())
   return {
+    ownsOverlayFocusTarget: () => true,
     render(width: number): string[] {
       beforeRender()
       return sideLines(width, sceneNow(), planOf(() => sideOffice, o => {
@@ -403,20 +406,34 @@ function sideComponent(beforeRender: () => void) {
   }
 }
 
+/** 입력창이 키를 받기 전이면 사이드바를 띄우지 않고 기다리는 간격·횟수(omp를 켜자마자 띄울 때) */
+const SIDE_RETRY_MS = 100
+const SIDE_RETRY_TIMES = 50
+let sideRetry: ReturnType<typeof setTimeout> | null = null
+
 /** 사이드바를 띄운다(이미 떠 있으면 그대로). 띄울 수 없으면 false */
-function openSide(): boolean {
+function openSide(tries = 0): boolean {
   if (side !== null) return true
   const tui = lastTui
   if (tui === null || typeof tui.showOverlay !== 'function') return false
-  // 키는 omp가 정한 곳(입력창·승인 창)으로 가지만, 겹친 화면에 포커스가 가면 입력창이 커서를 그리지 않는다:
-  // 띄우기 전의 입력창이 계속 커서를 그리게 한다(한글 조합 위치도 그 커서를 따른다)
+  // 포커스를 돌려줄 입력창: 아직 키를 받는 곳이 없으면(omp를 막 켰을 때) 생길 때까지 기다렸다 띄운다
   const editor = tui.getFocused?.() ?? null
+  if (editor === null || typeof editor.handleInput !== 'function') {
+    if (sideRetry === null && tries < SIDE_RETRY_TIMES) sideRetry = setTimeout(() => {
+      sideRetry = null
+      if (isSideWanted) openSide(tries + 1)
+    }, SIDE_RETRY_MS)
+    return true
+  }
+  // 겹친 화면에 포커스가 가면 입력창이 커서를 그리지 않는다:
+  // 띄우기 전의 입력창이 계속 커서를 그리게 한다(한글 조합 위치도 그 커서를 따른다)
   const comp = sideComponent(() => {
-    if (editor !== null && typeof editor === 'object' && 'focused' in editor && tui.getFocused?.() === comp) editor.focused = true
+    if (typeof editor === 'object' && 'focused' in editor && tui.getFocused?.() === comp) editor.focused = true
   })
   // 평면도를 켜 두었으면 평면도가 들어갈 만큼(평면도 최소 72칸 + 테두리) 넓힌다
   const handle = tui.showOverlay(comp, { anchor: 'top-right', width: isPlanShown ? SIDE_PLAN_COLUMNS : '34%', minWidth: 44, maxHeight: '100%', visible: (w: number) => w >= SIDE_MIN_COLUMNS })
-  if (editor !== null && typeof editor === 'object' && 'focused' in editor) editor.focused = true
+  tui.setFocus?.(editor)
+  if (typeof editor === 'object' && 'focused' in editor) editor.focused = true
   side = {
     hide: () => {
       handle.hide()
@@ -429,8 +446,11 @@ function openSide(): boolean {
 
 /** 사이드바를 켜고 끈다. 켜졌으면 true, 띄울 수 없는 화면이면 null */
 function toggleSide(): boolean | null {
-  if (side !== null) {
-    side.hide()
+  // 띄우려고 기다리는 중이어도 켜진 것으로 보고 끈다
+  if (side !== null || sideRetry !== null) {
+    if (sideRetry !== null) clearTimeout(sideRetry)
+    sideRetry = null
+    side?.hide()
     side = null
     isSideWanted = false
     lastTui?.requestRender?.()
