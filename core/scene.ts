@@ -595,28 +595,26 @@ export class Office {
       return null
     }
 
-    // 부서 섬: 부서색 카펫, 표지, 팀장 책상(스탠드), 팀원 책상, 모니터와 명패
+    // 부서 섬: 부서색 카펫, 표지, 팀장 책상(스탠드), 팀원 책상, 모니터와 명패. 부서가 없는 섬도 빈 책상과 꺼진 모니터는 둔다
     for (const c of plan.clusters) {
       const dept = c.dept
       const tint = dept === undefined ? FLOOR.office[1] : shade(DEPT_INFO[dept].color, 0.32)
       cv.rect(c.x - 1, c.y - 4, CLUSTER_W - 1, 10, tint)
-      if (dept === undefined) {
-        plant(cv, c.x + 8, c.y)
-        continue
+      if (dept !== undefined) {
+        cv.write(c.x, (c.y - 4) / 2, DEPT_INFO[dept].en.slice(0, CLUSTER_W - 2), DEPT_INFO[dept].color, tint)
+        take(c.x, (c.y - 4) / 2, DEPT_INFO[dept].en.slice(0, CLUSTER_W - 2).length)
       }
-      cv.write(c.x, (c.y - 4) / 2, DEPT_INFO[dept].en.slice(0, CLUSTER_W - 2), DEPT_INFO[dept].color, tint)
-      take(c.x, (c.y - 4) / 2, DEPT_INFO[dept].en.slice(0, CLUSTER_W - 2).length)
       for (let seat = 0; seat < 3; seat++) {
         const x = seat === 0 ? c.x : c.x + 7 + (seat - 1) * 6
         const width = seat === 0 ? 6 : 5
-        const owner = here.find(a => a.dept === dept && this.seats.get(a.id) === seat)
+        const owner = dept === undefined ? undefined : here.find(a => a.dept === dept && this.seats.get(a.id) === seat)
         const wk = owner === undefined ? undefined : settled(owner)
         const isAtDesk = wk !== undefined && wk.goal?.room === 'office'
         const [s1, s2] = isAtDesk && owner !== undefined ? screenColors(owner.activity, frame) : [C.mon, C.mon]
         cv.set(x + 2, c.y - 1, s1)
         cv.set(x + 3, c.y - 1, s2)
         if (seat === 0) cv.set(x + width - 1, c.y - 1, C.lamp)
-        const nick = owner?.nick ?? (seat === 0 ? leads[dept] : undefined)
+        const nick = owner?.nick ?? (seat === 0 && dept !== undefined ? leads[dept] : undefined)
         const deskColor = seat === 0 ? C.deskLead : C.desk
         cv.rect(x, c.y, width, 2, deskColor)
         if (nick !== undefined) {
